@@ -1,7 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.routers import revenue_risk
+from app.routers import (
+    revenue_risk,
+    transactions,
+    recovery_opportunities,
+    ai_decisions,
+    analytics,
+    audit_logs
+)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -19,6 +26,11 @@ app.add_middleware(
 
 # Include API Routers
 app.include_router(revenue_risk.router, prefix=settings.API_V1_STR)
+app.include_router(transactions.router, prefix=settings.API_V1_STR)
+app.include_router(recovery_opportunities.router, prefix=settings.API_V1_STR)
+app.include_router(ai_decisions.router, prefix=settings.API_V1_STR)
+app.include_router(analytics.router, prefix=settings.API_V1_STR)
+app.include_router(audit_logs.router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 async def root():

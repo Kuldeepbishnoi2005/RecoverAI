@@ -1,16 +1,18 @@
 from typing import List, Dict, Any
 from app.db import get_supabase_admin_client
-from app.engine.dataset_generator import BENCHMARK_MERCHANT_ID
+from app.engine.dataset_generator import BENCHMARK_MERCHANT_ID, BENCHMARK_VERSION
 
 BATCH_SIZE = 1000
 
 def seed_benchmark_to_supabase(
     dataset: List[Dict[str, Any]],
-    evaluation_metrics: Dict[str, Any]
+    evaluation_metrics: Dict[str, Any],
+    benchmark_version: str = BENCHMARK_VERSION
 ) -> Dict[str, Any]:
     """
     Persists synthetic benchmark dataset and evaluation metrics into Supabase tables
     using the SECURITY DEFINER RPC function `seed_benchmark_data`.
+    Tags records with benchmark_version and dataset_split.
     """
     supabase = get_supabase_admin_client()
 
@@ -21,7 +23,7 @@ def seed_benchmark_to_supabase(
         "slug": "acme_benchmark_merchant",
         "plan": "enterprise",
         "currency": "INR",
-        "settings": {"auto_mode": True, "min_confidence": 85}
+        "settings": {"auto_mode": True, "min_confidence": 85, "benchmark_version": benchmark_version}
     }
 
     # 2. Extract Customers
@@ -47,7 +49,7 @@ def seed_benchmark_to_supabase(
     # 3. Process items in matched batches so foreign keys are guaranteed
     eval_run_payload = {
         "merchant_id": BENCHMARK_MERCHANT_ID,
-        "name": "Phase 2 Deterministic Revenue Risk Engine Benchmark",
+        "name": f"Phase 2.5 Decoupled Revenue Risk Engine Benchmark ({benchmark_version})",
         "status": "completed",
         "metrics": evaluation_metrics
     }
@@ -90,6 +92,8 @@ def seed_benchmark_to_supabase(
                     "dispute_status": item["dispute_status"],
                     "checkout_completed": item["checkout_completed"],
                     "event_type": item["event_type"],
+                    "benchmark_version": item.get("benchmark_version", benchmark_version),
+                    "dataset_split": item.get("dataset_split", "train"),
                     "ground_truth": gt,
                     "risk_engine": pred
                 },
@@ -120,7 +124,8 @@ def seed_benchmark_to_supabase(
                     "details": {
                         "risk_score": pred["risk_score"],
                         "recovery_probability": pred["recovery_probability"],
-                        "reason": pred["reason"]
+                        "reason": pred["reason"],
+                        "benchmark_version": item.get("benchmark_version", benchmark_version)
                     }
                 })
 
@@ -160,6 +165,7 @@ def seed_benchmark_to_supabase(
 
     return {
         "status": "success",
+        "benchmark_version": benchmark_version,
         "merchant_id": BENCHMARK_MERCHANT_ID,
         "transactions_inserted": total_tx_inserted,
         "risk_events_inserted": total_rre_inserted,

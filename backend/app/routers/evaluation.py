@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query, Body
-from typing import Dict, Any, Optional
-from app.engine.dataset_generator import generate_synthetic_dataset, DEFAULT_SEED, BENCHMARK_MERCHANT_ID
+from typing import Dict, Any, Optional, List
+from app.engine.dataset_generator import generate_synthetic_dataset, DEFAULT_SEED, BENCHMARK_MERCHANT_ID, BENCHMARK_VERSION
 from app.engine.risk_engine import evaluate_risk_events
 from app.engine.evaluator import run_evaluation
 from app.engine.db_seeder import seed_benchmark_to_supabase
@@ -12,25 +12,33 @@ router = APIRouter(prefix="/evaluation", tags=["Evaluation"])
 async def generate_dataset_endpoint(
     count: int = Query(10000, ge=100, le=50000),
     seed: int = Query(DEFAULT_SEED),
+    benchmark_version: str = Query(BENCHMARK_VERSION),
     persist: bool = Query(True)
 ):
     """
     Generates deterministic synthetic payment dataset and computes Ground Truth & Risk Engine scores.
+    Includes train (60%), validation (20%), and test (20%) splits.
     Optionally persists the dataset into Supabase schema.
     """
     try:
-        raw_dataset = generate_synthetic_dataset(count=count, seed=seed, merchant_id=BENCHMARK_MERCHANT_ID)
+        raw_dataset = generate_synthetic_dataset(
+            count=count, 
+            seed=seed, 
+            merchant_id=BENCHMARK_MERCHANT_ID,
+            benchmark_version=benchmark_version
+        )
         evaluated_dataset = evaluate_risk_events(raw_dataset)
         eval_metrics = run_evaluation(evaluated_dataset)
 
         persist_res = None
         if persist:
-            persist_res = seed_benchmark_to_supabase(evaluated_dataset, eval_metrics)
+            persist_res = seed_benchmark_to_supabase(evaluated_dataset, eval_metrics, benchmark_version=benchmark_version)
 
         return {
             "status": "success",
             "count": count,
             "seed": seed,
+            "benchmark_version": benchmark_version,
             "metrics": eval_metrics,
             "db_persistence": persist_res
         }
@@ -39,16 +47,16 @@ async def generate_dataset_endpoint(
 
 @router.post("/run")
 async def run_evaluation_endpoint(
-    merchant_id: Optional[str] = Query(BENCHMARK_MERCHANT_ID)
+    merchant_id: Optional[str] = Query(BENCHMARK_MERCHANT_ID),
+    split: Optional[str] = Query(None, description="Filter dataset by split: 'train', 'validation', or 'test'")
 ):
     """
-    Runs the evaluation pipeline against database transactions for a given merchant.
-    Calculates Precision, Recall, F1, FPR, FNR, and revenue metrics.
+    Runs the evaluation pipeline against database transactions for a given merchant and optional dataset split.
+    Calculates Precision, Recall, F1, ROC-AUC, PR-AUC, Brier Score, Calibration Error, and financial metrics.
     """
     try:
         supabase = get_supabase_admin_client()
 
-        # Query transactions from Supabase
         query = supabase.table("transactions").select("*")
         if merchant_id:
             query = query.eq("merchant_id", merchant_id)
@@ -58,14 +66,17 @@ async def run_evaluation_endpoint(
         if not tx_list:
             raise HTTPException(status_code=404, detail="No transactions found in database to evaluate.")
 
-        # Re-construct dataset records with predictions and ground truth
         evaluated_dataset = []
         for tx in tx_list:
             meta = tx.get("metadata", {})
+            
+            # Filter by split if requested
+            if split and meta.get("dataset_split") != split:
+                continue
+
             gt = meta.get("ground_truth")
             risk_pred = meta.get("risk_engine")
 
-            # Fallback if metadata missing
             if not gt or not risk_pred:
                 record = {
                     "transaction_status": tx["status"],
@@ -74,6 +85,7 @@ async def run_evaluation_endpoint(
                     "card_expiry_status": meta.get("card_expiry_status", "valid"),
                     "checkout_completed": meta.get("checkout_completed", True),
                     "previous_success_rate": meta.get("previous_success_rate", 0.80),
+                    "customer_lifetime_value": meta.get("customer_lifetime_value", 5000.0),
                     "subscription_status": meta.get("subscription_status", "active"),
                     "retry_count": meta.get("retry_count", 0),
                     "days_since_last_success": meta.get("days_since_last_success", 0)
@@ -90,12 +102,14 @@ async def run_evaluation_endpoint(
                 "risk_engine_result": risk_pred
             })
 
+        if not evaluated_dataset:
+            raise HTTPException(status_code=404, detail=f"No transactions found matching split '{split}'.")
+
         metrics = run_evaluation(evaluated_dataset)
 
-        # Record evaluation run in database
         eval_run_payload = {
             "merchant_id": merchant_id,
-            "name": f"Evaluation Run - {len(evaluated_dataset)} records",
+            "name": f"Evaluation Run ({split or 'all_splits'}) - {len(evaluated_dataset)} records",
             "status": "completed",
             "metrics": metrics
         }
@@ -103,6 +117,7 @@ async def run_evaluation_endpoint(
 
         return {
             "status": "success",
+            "split": split or "all",
             "evaluated_records": len(evaluated_dataset),
             "metrics": metrics
         }

@@ -5,25 +5,31 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from tests.test_phase2_engine import (
-    test_dataset_generation,
-    test_deterministic_seed,
-    test_ground_truth_labeling,
-    test_risk_scoring,
-    test_recovery_opportunity_detection,
-    test_revenue_at_risk_calculation,
-    test_evaluation_metrics
+    test_dataset_generation_structure_and_splits,
+    test_reproducible_random_seed,
+    test_risk_engine_no_ground_truth_access,
+    test_customer_history_influences_probability,
+    test_retry_count_influences_probability,
+    test_amount_influences_expected_recovery_amount,
+    test_probability_bounded_between_zero_and_one,
+    test_mathematical_consistency,
+    test_ambiguity_test_fixtures,
+    test_evaluator_continuous_metrics
 )
 
 def main():
-    print("--- RUNNING PHASE 2 ENGINE AUTOMATED TEST SUITE ---")
+    print("--- RUNNING PHASE 2.5 DECOUPLED ENGINE AUTOMATED TEST SUITE ---")
     tests = [
-        ("1. Dataset Generation Test", test_dataset_generation),
-        ("2. Deterministic Seed Test", test_deterministic_seed),
-        ("3. Ground-Truth Labeling Test", test_ground_truth_labeling),
-        ("4. Risk Scoring Test", test_risk_scoring),
-        ("5. Recovery Opportunity Detection Test", test_recovery_opportunity_detection),
-        ("6. Revenue-At-Risk Calculation Test", test_revenue_at_risk_calculation),
-        ("7. Evaluation Metrics Test", test_evaluation_metrics)
+        ("1. Dataset Generation Structure & Splits Test", test_dataset_generation_structure_and_splits),
+        ("2. Reproducible Random Seed Test", test_reproducible_random_seed),
+        ("3. Risk Engine Independence (No GT Access) Test", test_risk_engine_no_ground_truth_access),
+        ("4. Customer History Sensitivity Test", test_customer_history_influences_probability),
+        ("5. Retry Velocity Sensitivity Test", test_retry_count_influences_probability),
+        ("6. Transaction Amount Sensitivity Test", test_amount_influences_expected_recovery_amount),
+        ("7. Probability Boundedness [0, 1] Test", test_probability_bounded_between_zero_and_one),
+        ("8. Mathematical Consistency Test", test_mathematical_consistency),
+        ("9. Ambiguity Test Fixtures (20 cases) Test", test_ambiguity_test_fixtures),
+        ("10. Continuous Evaluator Metrics Test", test_evaluator_continuous_metrics)
     ]
 
     passed = 0
@@ -41,7 +47,7 @@ def main():
     if failed > 0:
         sys.exit(1)
     else:
-        print("ALL AUTOMATED TESTS PASSED SUCCESSFULLY!")
+        print("ALL PHASE 2.5 TESTS PASSED SUCCESSFULLY!")
 
 if __name__ == "__main__":
     main()

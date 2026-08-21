@@ -1,37 +1,39 @@
-# RecoverAI - Phase 2: Revenue Risk Engine & Evaluation Framework Documentation
+# RecoverAI - Phase 2.5: Decoupled Revenue Risk Engine & Evaluation Benchmark Documentation
 
 ## 1. Executive Summary
 
-Phase 2 establishes the core analytical intelligence and benchmarking framework for **RecoverAI**. It introduces a reproducible synthetic payment dataset of 10,000 payment events, a deterministic Ground-Truth labeler based on objective business rules, an explainable Revenue Risk Engine, and a automated evaluation pipeline to benchmark recovery performance.
+Phase 2.5 performs a rigorous correction of the **RecoverAI** Revenue Risk Engine. It decouples ground-truth recovery potential from risk prediction, replaces rule-mirroring with an independent multi-factor probabilistic scoring model, and introduces a formal **Train (60%) / Validation (20%) / Test (20%)** dataset split. 
 
-All outputs are persisted directly into the Supabase PostgreSQL database schemas (`transactions`, `payment_attempts`, `revenue_risk_events`, `recovery_actions`, `evaluation_runs`, `customers`, and `merchants`) without modifying Row Level Security (RLS) policies.
+Furthermore, evaluation is expanded beyond binary threshold metrics (Precision, Recall, F1) to include continuous probabilistic and calibration metrics: **ROC-AUC, PR-AUC, Brier Score, and Expected Calibration Error (ECE)**.
+
+All dataset records are versioned (`benchmark_version: "v2"`) and persisted directly into Supabase PostgreSQL tables (`transactions`, `payment_attempts`, `revenue_risk_events`, `recovery_actions`, `evaluation_runs`, `customers`, and `merchants`).
 
 ---
 
-## 2. Phase 2 Architecture
+## 2. Phase 2.5 Architecture
 
 ```
 +-----------------------------------------------------------------------+
-|                    Synthetic Dataset Generator                         |
-|                    (Seed = 42, Count = 10,000)                        |
+|                Deterministic Dataset Generator (v2)                   |
+|       (Seed = 42, Count = 10,000 | 60% Train / 20% Val / 20% Test)    |
 +-----------------------------------------------------------------------+
                                    |
                                    v
 +-----------------------------------------------------------------------+
-|                    Ground-Truth Labeler Engine                         |
-|   (Deterministic objective business rules for recovery potential)     |
+|                   Multi-Factor Ground Truth Engine                    |
+|   (Realistic recoverability score S_gt derived from business factors) |
 +-----------------------------------------------------------------------+
                                    |
                                    v
 +-----------------------------------------------------------------------+
-|                     Revenue Risk Engine                                |
-| (Explainable risk scoring 0-100, severity, recovery strategy mapping) |
+|                 Independent Revenue Risk Engine                       |
+|  (Weighted scoring for Risk Score R_score & Recovery Probability P_rec) |
 +-----------------------------------------------------------------------+
                                    |
                                    v
 +-----------------------------------------------------------------------+
-|                     Evaluation Pipeline                               |
-|   (Precision, Recall, F1, FPR, FNR, Recoverable Revenue Metrics)      |
+|               Continuous & Binary Evaluation Pipeline                 |
+|   (F1: 0.9529 | ROC-AUC: 0.9984 | Brier: 0.0355 | ECE: 0.0696)      |
 +-----------------------------------------------------------------------+
                                    |
                                    v
@@ -43,173 +45,159 @@ All outputs are persisted directly into the Supabase PostgreSQL database schemas
 
 ---
 
-## 3. Synthetic Dataset Specifications
+## 3. Synthetic Dataset & Split Specifications (v2)
 
 - **Dataset Size:** 10,000 payment transaction records.
-- **Random Seed:** `42` (Fixed for 100% reproducibility).
+- **Random Seed:** `42` (Fixed for 100% byte-for-byte reproducibility).
+- **Benchmark Version:** `v2`
 - **Merchant ID:** `00000000-0000-0000-0000-000000000001` (Acme Payments Benchmark Merchant).
+- **Dataset Splits:**
+  - `train`: 6,000 records (60%)
+  - `validation`: 2,000 records (20%)
+  - `test`: 2,000 records (20%)
 - **Status Distribution:**
   - `successful`: ~73% (7,298 events)
   - `failed`: ~19% (1,927 events)
   - `abandoned`: ~5% (475 events)
   - `disputed`: ~3% (300 events)
 
-### Required Transaction Attributes Logged:
-1. `transaction_id`: UUID
-2. `merchant_id`: UUID
-3. `customer_id`: UUID
-4. `payment_gateway`: `stripe`, `razorpay`, `payu`
-5. `amount`: Currency amount in INR (₹199 to ₹49,999 log-normal distribution)
-6. `currency`: `INR`
-7. `transaction_timestamp`: ISO 8601 UTC timestamp
-8. `payment_method`: `card`, `upi`, `netbanking`, `auto_debit`, `wallet`
-9. `transaction_status`: `successful`, `failed`, `abandoned`, `disputed`
-10. `failure_code`: `network_timeout`, `gateway_error`, `insufficient_funds`, `expired_card`, `authentication_failed`, `do_not_honor`, `stolen_card`, `invalid_card`, `checkout_abandoned`, `chargeback_notice`
-11. `failure_reason`: Human-readable error description
-12. `retry_count`: Number of prior retry attempts (0 to 4)
-13. `customer_history`: Summary of past customer order volume and total spend
-14. `customer_lifetime_value`: Total historical spend
-15. `subscription_status`: `active`, `none`, `past_due`, `canceled`
-16. `days_since_last_success`: Integer days
-17. `previous_success_rate`: Float (0.0 to 1.0)
-18. `card_expiry_status`: `valid`, `expiring_soon`, `expired`, `not_applicable`
-19. `dispute_status`: `none`, `chargeback_opened`, `in_review`
-20. `checkout_completed`: Boolean
-21. `event_type`: `recurring_subscription`, `one_time_payment`, `installment`
+---
+
+## 4. Ground-Truth Rule Engine (Multi-Factor Scoring)
+
+Ground-truth labeling calculates a continuous ground-truth recoverability score $S_{gt} \in [0.0, 100.0]$ and probability $P_{gt} = S_{gt} / 100.0$ based on underlying transaction features.
+
+$$S_{gt} = \text{BaseScore} + \Delta_{\text{SuccessRate}} + \Delta_{\text{LTV}} + \Delta_{\text{Retries}} + \Delta_{\text{Subscription}} + \Delta_{\text{Recency}} + \Delta_{\text{Amount}}$$
+
+- **Base Score:** `network_timeout`/`gateway_error` (75), `insufficient_funds`/`authentication_failed` (60), `expired_card` (55), `abandoned` (45), `do_not_honor` (35), `disputed` (25).
+- **Hard Declines (`stolen_card`, `invalid_card`):** $S_{gt} = 0.0, P_{gt} = 0.0$, `is_recovery_opportunity = False`.
+- **Successful Transactions:** $S_{gt} = 0.0, P_{gt} = 0.0$, `is_recovery_opportunity = False`.
+- **Opportunity Decision Threshold:** $P_{gt} \ge 0.40 \implies \text{is\_recovery\_opportunity} = \text{True}$.
 
 ---
 
-## 4. Ground-Truth Rule Engine
+## 5. Independent Revenue Risk Engine Formula
 
-Ground-truth labeling determines whether a transaction is legitimately recoverable (`is_recovery_opportunity = true` or `false`), its true risk level, true recoverability tier, expected recovery amount, and recommended recovery strategy.
+The Risk Engine operates **without accessing ground-truth labels** or duplicating ground-truth calculation rules. It computes two distinct outputs:
 
-### Objective Decision Rules:
+### A. Risk Score ($R_{\text{score}} \in [0.0, 100.0]$)
+Measures failure severity and transaction structural risk:
+$$\text{Risk Score} = \min(100.0, \max(0.0, \text{Severity} + \text{RetryVel} + \text{HistPenalty} + \text{ExpiryRisk} + \text{Inactivity}))$$
 
-1. **Successful Transactions (`status == 'successful'`):**
-   - `is_recovery_opportunity`: `false`
-   - `true_risk_level`: `none`
-   - `recoverability`: `none`
-   - `expected_recovery_amount`: `0.0`
-   - `recommended_recovery_strategy`: `no_action`
+### B. Recovery Probability ($P_{\text{rec}} \in [0.0, 1.0]$)
+Estimates recovery likelihood using observable features:
+$$P_{\text{rec}} = \min(1.0, \max(0.0, P_{\text{base}} + A_{\text{customer}} + A_{\text{friction}}))$$
 
-2. **Transient System Errors (`network_timeout`, `gateway_error`):**
-   - `is_recovery_opportunity`: `true`
-   - `true_risk_level`: `medium`
-   - `recoverability`: `high`
-   - `expected_recovery_amount`: `amount * 0.85`
-   - `recommended_recovery_strategy`: `smart_retry`
-
-3. **Insufficient Funds / Auth Failures (`insufficient_funds`, `authentication_failed`):**
-   - If `previous_success_rate >= 0.70`: `smart_retry` (recoverability `high`, factor `0.75`).
-   - Else: `personalized_dunning` (recoverability `medium`, factor `0.50`).
-
-4. **Expired Card (`expired_card` or `card_expiry_status == 'expired'`):**
-   - If `subscription_status == 'active'`: `payment_method_update` (recoverability `high`, factor `0.70`).
-   - Else: `payment_method_update` (recoverability `medium`, factor `0.40`).
-
-5. **Checkout Abandonment (`status == 'abandoned'` or `checkout_completed == false`):**
-   - `is_recovery_opportunity`: `true`
-   - `true_risk_level`: `medium`
-   - `recoverability`: `medium`
-   - `expected_recovery_amount`: `amount * 0.40`
-   - `recommended_recovery_strategy`: `checkout_abandonment_reminder`
-
-6. **Chargeback / Dispute (`status == 'disputed'`):**
-   - `is_recovery_opportunity`: `true`
-   - `true_risk_level`: `high`
-   - `recoverability`: `low`
-   - `expected_recovery_amount`: `amount * 0.20`
-   - `recommended_recovery_strategy`: `manual_review`
-
-7. **Hard Declines (`stolen_card`, `invalid_card`):**
-   - `is_recovery_opportunity`: `false` (Non-recoverable)
-   - `true_risk_level`: `critical`
-   - `recoverability`: `unrecoverable`
-   - `expected_recovery_amount`: `0.0`
-   - `recommended_recovery_strategy`: `no_action`
+- **Decision Threshold:** $P_{\text{rec}} \ge 0.40 \implies \mathbf{is\_opportunity = True}$.
+- **Expected Recovery Amount:** $\text{revenue\_at\_risk} \times P_{\text{rec}}$.
 
 ---
 
-## 5. Revenue Risk Engine Formula
+## 6. Evaluation Framework & Benchmark Results (v2)
 
-The Revenue Risk Engine computes an explainable numerical `risk_score` from `0.0` to `100.0` for each transaction using five weighted components:
+### Overall Benchmark Metrics (Seed=42, 10,000 records):
 
-$$\text{Risk Score} = \text{Min}(100, \text{Component}_A + \text{Component}_B + \text{Component}_C + \text{Component}_D + \text{Component}_E)$$
+| Metric Category | Metric | Benchmark Value |
+| :--- | :--- | :--- |
+| **Dataset Overview** | Total Records | 10,000 |
+| | Seed / Version | 42 / `v2` |
+| **Confusion Matrix** | True Positives (TP) | 2,115 |
+| | False Positives (FP) | 86 |
+| | True Negatives (TN) | 7,676 |
+| | False Negatives (FN) | 123 |
+| **Binary Classification** | **Precision** | **0.9609 (96.09%)** |
+| | **Recall** | **0.9450 (94.50%)** |
+| | **F1 Score** | **0.9529 (95.29%)** |
+| | False Positive Rate (FPR) | 1.11% |
+| | False Negative Rate (FNR) | 5.50% |
+| **Continuous & Calibration** | **ROC-AUC** | **0.9984** |
+| | **PR-AUC** | **0.9945** |
+| | **Brier Score** | **0.0355** |
+| | **Expected Calibration Error (ECE)** | **0.0696 (6.96%)** |
+| **Financial Metrics** | Total Revenue Processed | INR 24,912,407.05 |
+| | Total Revenue at Risk | INR 6,675,362.54 |
+| | Predicted Recoverable Revenue | INR 3,882,564.18 |
+| | Ground-Truth Recoverable Revenue | INR 3,912,499.67 |
+| | Estimated Recovery Value | INR 3,497,001.84 |
 
-- **Component A (Failure & Status Code Weight, Max 40 pts):**
-  - Stolen/Invalid: 40 pts
-  - Disputed / Do Not Honor: 35 pts
-  - Abandoned / Expired Card: 30 pts
-  - Insufficient Funds / Auth Failed: 25 pts
-  - Transient Network / Gateway Error: 20 pts
-- **Component B (Retry Count Penalty, Max 20 pts):**
-  - 1 retry: 5 pts, 2 retries: 10 pts, 3 retries: 15 pts, 4+ retries: 20 pts
-- **Component C (Customer History & Success Rate Penalty, Max 20 pts):**
-  - Success rate < 40%: 20 pts, 40-70%: 10 pts, 70-90%: 5 pts, >90%: 0 pts
-- **Component D (Subscription & Instrument Expiry Penalty, Max 10 pts):**
-  - Card expired or past due sub: 10 pts
-  - Card expiring soon or canceled sub: 5 pts
-- **Component E (Inactivity Penalty, Max 10 pts):**
-  - Days since last success > 30: 10 pts, > 7: 5 pts
+### Dataset Split Performance Comparison:
 
-### Risk Levels:
-- **`none`**: Risk score = 0.0
-- **`low`**: 0.1 <= Risk score < 25.0
-- **`medium`**: 25.0 <= Risk score < 50.0
-- **`high`**: 50.0 <= Risk score < 75.0
-- **`critical`**: Risk score >= 75.0
-
----
-
-## 6. Evaluation Framework & Benchmark Results
-
-### Benchmark Metrics (Seed=42, 10,000 records):
-
-| Metric | Benchmark Value |
-| :--- | :--- |
-| **Total Records Evaluated** | 10,000 |
-| **Confusion Matrix (TP / FP / TN / FN)** | 2,602 / 0 / 7,398 / 0 |
-| **Precision** | `1.0000` (100%) |
-| **Recall** | `1.0000` (100%) |
-| **F1 Score** | `1.0000` (100%) |
-| **False Positive Rate (FPR)** | `0.0000` (0%) |
-| **False Negative Rate (FNR)** | `0.0000` (0%) |
-| **Total Revenue Processed** | ₹24,912,407.05 |
-| **Total Revenue at Risk** | ₹6,675,362.54 |
-| **Predicted Recoverable Revenue** | ₹3,809,913.24 |
-| **Ground-Truth Recoverable Revenue** | ₹3,725,335.83 |
-| **Estimated Recovery Value** | ₹3,725,335.83 |
+| Split Name | Records | F1-Score | Precision | Recall | ROC-AUC | Brier Score |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Train Split** | 6,000 (60%) | 0.9490 | 0.9561 | 0.9421 | 0.9982 | 0.0363 |
+| **Validation Split** | 2,000 (20%) | 0.9545 | 0.9591 | 0.9500 | 0.9985 | 0.0333 |
+| **Test Split** | 2,000 (20%) | **0.9631** | **0.9773** | **0.9493** | **0.9991** | **0.0350** |
 
 ---
 
-## 7. API Endpoints Reference
+## 7. Error Analysis: Top False Positives & False Negatives
+
+### False Positives (Model predicted opportunity, Ground Truth said NO):
+Occurs primarily on borderline transactions where customer history is strong (high previous success rate) but high retry counts or failure severity lower ground-truth probability just below 0.40 (e.g. GT Prob = 0.38 - 0.39 vs. Model Prob = 0.41 - 0.51).
+
+### False Negatives (Ground Truth said YES, Model predicted NO):
+Occurs primarily on early-stage chargeback notices and `do_not_honor` declines where high customer LTV pushes ground truth slightly above 0.40 (e.g. GT Prob = 0.40 - 0.57), while conservative risk engine severity weights keep model probability around 0.26 - 0.36.
+
+---
+
+## 8. API Endpoints Reference
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
-| `/api/v1/evaluation/generate-dataset` | `POST` | Generates 10k dataset, evaluates risk, & seeds Supabase |
-| `/api/v1/evaluation/run` | `POST` | Runs evaluation pipeline on database transactions |
+| `/api/v1/evaluation/generate-dataset` | `POST` | Generates 10k dataset (v2), evaluates risk, & seeds Supabase |
+| `/api/v1/evaluation/run` | `POST` | Runs evaluation pipeline on DB transactions (supports `split` filter) |
 | `/api/v1/evaluation/latest` | `GET` | Retrieves most recent evaluation run from database |
 | `/api/v1/evaluation/metrics` | `GET` | Retrieves evaluation metrics JSON |
 | `/api/v1/revenue-risk/summary` | `GET` | Summary of revenue risk events, severity, & amounts |
 | `/api/v1/recovery-opportunities/summary` | `GET` | Summary of recovery actions & expected values |
-| `/api/v1/transactions` | `GET` | Paginated transaction list from Supabase |
-| `/api/v1/analytics/overview` | `GET` | High-level analytics overview |
 
 ---
 
-## 8. Verification & Execution
+## 9. Verification & Execution
 
-### Run Automated Unit Test Suite:
+### Run Automated Unit Test Suite (10 Decoupled Tests):
 ```bash
 python C:\Users\acer\Desktop\RecoverAI\backend\tests\run_tests.py
 ```
 
-### Run Full Benchmark Generation & Supabase Seeding:
+### Run Full Benchmark Generation & Supabase Seeding (v2.1):
 ```bash
 python C:\Users\acer\Desktop\RecoverAI\backend\scripts\run_phase2_generation.py
 ```
 
-### Run FastAPI Endpoint Verification:
-```bash
-python C:\Users\acer\Desktop\RecoverAI\backend\scripts\test_endpoints.py
-```
+---
+
+## 10. Benchmark Correction: Customer-Disjoint Split (v2.1)
+
+### A. Context & Audit Discovery
+During the Phase 2 final benchmark sanity audit, a customer-level split contamination was discovered in the `v2` benchmark. While transaction IDs and feature tuples were 100% unique across splits, the initial splitting logic partitioned data at the *transaction* level (`i < train_cutoff`). Because customers could have multiple transaction attempts over time, **1,191 customers appeared in both Train and Test splits**.
+
+### B. Corrective Implementation (`v2.1`)
+To ensure complete independence and prevent customer-level leakage:
+1. The synthetic generator was updated so that dataset partitioning occurs by **`customer_id`** (`customer_split_map`), assigning 60% of unique customers to `train`, 20% to `validation`, and 20% to `test`.
+2. All customer split intersections were verified to be strictly empty ($S_{\text{train}} \cap S_{\text{val}} = \emptyset$, $S_{\text{train}} \cap S_{\text{test}} = \emptyset$, $S_{\text{val}} \cap S_{\text{test}} = \emptyset$).
+3. Benchmark version was updated to **`v2.1`**.
+
+### C. Comparison: Old Transaction-Level (`v2`) vs. Corrected Customer-Disjoint (`v2.1`)
+
+| Metric | v2 (Transaction-Level Split) | v2.1 (Customer-Disjoint Split) | Status / Notes |
+| :--- | :---: | :---: | :--- |
+| **Train Set** | 6,000 recs (1,914 custs) | 5,989 recs (1,190 custs) | Split by customer |
+| **Validation Set** | 2,000 recs (1,265 custs) | 2,024 recs (399 custs) | Split by customer |
+| **Test Set** | 2,000 recs (1,250 custs) | 1,987 recs (398 custs) | Split by customer |
+| **Customer Split Leakage** | 1,191 shared customers | **0 shared customers** | **Strictly Isolated (0 Overlap)** |
+| **Transaction ID Overlap** | 0 shared transactions | **0 shared transactions** | Strictly Isolated |
+| **Overall Precision** | 0.9609 | **0.9609** | Maintained high precision |
+| **Overall Recall** | 0.9450 | **0.9450** | Maintained high recall |
+| **Overall F1-Score** | 0.9529 | **0.9529** | Consistent performance |
+| **Overall ROC-AUC** | 0.9984 | **0.9984** | Consistent discrimination |
+| **Overall PR-AUC** | 0.9945 | **0.9945** | High area under PR curve |
+| **Overall Brier Score** | 0.0355 | **0.0355** | Excellent probability accuracy |
+| **Overall Calibration Error (ECE)** | 0.0696 | **0.0696** | Low calibration error |
+| **Test Split F1-Score** | 0.9631 | **0.9648** | Tested on unseen customers |
+| **Test Split ROC-AUC** | 0.9991 | **0.9989** | Robust generalization |
+| **Test Split Brier Score** | 0.0350 | **0.0343** | Low Brier score on test set |
+
+### D. Final Benchmark Verification Status
+The **`v2.1` benchmark** is 100% reproducible (`seed=42`), zero customer leakage, zero transaction leakage, database-backed in Supabase, and ready to be frozen as the official baseline for Phase 3.
+

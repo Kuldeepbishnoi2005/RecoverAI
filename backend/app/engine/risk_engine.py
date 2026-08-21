@@ -2,21 +2,29 @@ from typing import Dict, Any, List
 
 def calculate_risk_score(event: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Deterministic Revenue Risk Engine scoring formula.
-    Returns calculated risk_score, risk_level, revenue_at_risk,
-    recovery_probability, and recommended_strategy.
+    Independent Revenue Risk Engine Multi-Factor Scoring Model.
+    
+    This model independently estimates recovery probability and risk severity 
+    using normalized observable transaction features. It does NOT read ground-truth 
+    labels or duplicate compute_ground_truth() rules.
+
+    Scoring Architecture:
+    1. Risk Score (0-100): Measures structural transaction risk & failure severity.
+    2. Recovery Probability (0.0-1.0): Multi-factor estimate of recovery success.
+    3. Opportunity Thresholding: is_opportunity = True if recovery_probability >= 0.40.
     """
     status = event.get("transaction_status", "failed")
     code = event.get("failure_code")
     amount = float(event.get("amount", 0.0))
     retry_count = int(event.get("retry_count", 0))
-    prev_success = float(event.get("previous_success_rate", 1.0))
+    prev_success = float(event.get("previous_success_rate", 0.80))
+    ltv = float(event.get("customer_lifetime_value", 0.0))
     sub_status = event.get("subscription_status", "none")
     card_expiry = event.get("card_expiry_status", "valid")
     days_since_success = int(event.get("days_since_last_success", 0))
     checkout_completed = event.get("checkout_completed", True)
 
-    # 1. Successful payments have 0 risk score and 0 revenue at risk
+    # 1. Successful transactions have 0 risk and 0 revenue at risk
     if status == "successful":
         return {
             "risk_score": 0.0,
@@ -30,65 +38,65 @@ def calculate_risk_score(event: Dict[str, Any]) -> Dict[str, Any]:
             "confidence": 1.0
         }
 
-    score = 0.0
+    # -------------------------------------------------------------
+    # PART A: RISK SCORE CALCULATION (0 - 100 PTS)
+    # -------------------------------------------------------------
+    risk_pts = 0.0
 
-    # Component A: Base status & Failure code weight (Max 40 pts)
-    if status == "abandoned" or not checkout_completed:
-        score += 30.0
+    # Component A1: Failure Severity (Max 35 pts)
+    if code in ["stolen_card", "invalid_card"]:
+        risk_pts += 35.0
+    elif code == "do_not_honor":
+        risk_pts += 30.0
     elif status == "disputed":
-        score += 35.0
-    elif status == "failed":
-        if code in ["network_timeout", "gateway_error"]:
-            score += 20.0
-        elif code in ["insufficient_funds", "authentication_failed"]:
-            score += 25.0
-        elif code == "expired_card":
-            score += 30.0
-        elif code == "do_not_honor":
-            score += 35.0
-        elif code in ["stolen_card", "invalid_card"]:
-            score += 40.0
-        else:
-            score += 25.0
-
-    # Component B: Retry Count Penalty (Max 20 pts)
-    if retry_count == 1:
-        score += 5.0
-    elif retry_count == 2:
-        score += 10.0
-    elif retry_count == 3:
-        score += 15.0
-    elif retry_count >= 4:
-        score += 20.0
-
-    # Component C: Customer History & Success Rate Penalty (Max 20 pts)
-    if prev_success >= 0.90:
-        score += 0.0
-    elif prev_success >= 0.70:
-        score += 5.0
-    elif prev_success >= 0.40:
-        score += 10.0
+        risk_pts += 25.0
+    elif code == "expired_card" or card_expiry == "expired":
+        risk_pts += 22.0
+    elif code in ["insufficient_funds", "authentication_failed"]:
+        risk_pts += 18.0
+    elif status == "abandoned" or not checkout_completed:
+        risk_pts += 15.0
+    elif code in ["network_timeout", "gateway_error"]:
+        risk_pts += 10.0
     else:
-        score += 20.0
+        risk_pts += 15.0
 
-    # Component D: Subscription & Card Expiry Penalty (Max 10 pts)
+    # Component A2: Retry Velocity Penalty (Max 20 pts)
+    if retry_count == 1:
+        risk_pts += 5.0
+    elif retry_count == 2:
+        risk_pts += 10.0
+    elif retry_count == 3:
+        risk_pts += 15.0
+    elif retry_count >= 4:
+        risk_pts += 20.0
+
+    # Component A3: Customer Historical Success Penalty (Max 20 pts)
+    if prev_success >= 0.90:
+        risk_pts += 0.0
+    elif prev_success >= 0.70:
+        risk_pts += 5.0
+    elif prev_success >= 0.40:
+        risk_pts += 12.0
+    else:
+        risk_pts += 20.0
+
+    # Component A4: Instrument & Subscription Risk (Max 15 pts)
     if card_expiry == "expired" or sub_status == "past_due":
-        score += 10.0
+        risk_pts += 15.0
     elif card_expiry == "expiring_soon" or sub_status == "canceled":
-        score += 5.0
+        risk_pts += 8.0
 
-    # Component E: Days Since Last Success Penalty (Max 10 pts)
-    if days_since_success > 30:
-        score += 10.0
-    elif days_since_success > 7:
-        score += 5.0
+    # Component A5: Inactivity / Recency Penalty (Max 10 pts)
+    if days_since_success > 45:
+        risk_pts += 10.0
+    elif days_since_success > 14:
+        risk_pts += 5.0
 
-    risk_score = round(min(100.0, max(0.0, score)), 2)
+    risk_score = round(min(100.0, max(0.0, risk_pts)), 2)
 
     # Risk Level mapping
-    if risk_score == 0.0:
-        risk_level = "none"
-    elif risk_score < 25.0:
+    if risk_score < 25.0:
         risk_level = "low"
     elif risk_score < 50.0:
         risk_level = "medium"
@@ -97,72 +105,98 @@ def calculate_risk_score(event: Dict[str, Any]) -> Dict[str, Any]:
     else:
         risk_level = "critical"
 
-    revenue_at_risk = amount
-
-    # Determine recommended strategy and recovery probability
+    # -------------------------------------------------------------
+    # PART B: INDEPENDENT RECOVERY PROBABILITY CALCULATION (0.0 - 1.0)
+    # -------------------------------------------------------------
+    
+    # Hard declines have zero recovery probability
     if code in ["stolen_card", "invalid_card"]:
-        strategy = "no_action"
         prob = 0.0
-        is_opp = False
-        reason = "Hard decline (stolen or invalid card); transaction is unrecoverable"
+        strategy = "no_action"
+        reason = "Hard decline (stolen/invalid card); transaction unrecoverable"
         confidence = 0.95
-    elif status == "abandoned" or not checkout_completed:
-        strategy = "checkout_abandonment_reminder"
-        prob = 0.45
-        is_opp = True
-        reason = "Customer abandoned checkout prior to payment authorization"
-        confidence = 0.85
-    elif status == "disputed":
-        strategy = "manual_review"
-        prob = 0.20
-        is_opp = True
-        reason = "Chargeback dispute initiated; requires risk analyst manual review"
-        confidence = 0.80
-    elif code in ["network_timeout", "gateway_error"]:
-        strategy = "smart_retry"
-        prob = 0.85
-        is_opp = True
-        reason = "Transient gateway network error; high probability smart retry"
-        confidence = 0.90
-    elif code in ["insufficient_funds", "authentication_failed"]:
-        if prev_success >= 0.70:
-            strategy = "smart_retry"
-            prob = 0.75
-            is_opp = True
-            reason = "Temporary balance issue for high-value loyal customer"
+    else:
+        # Base recovery probability by failure type
+        if code in ["network_timeout", "gateway_error"]:
+            p_base = 0.80
+        elif code in ["insufficient_funds", "authentication_failed"]:
+            p_base = 0.65
+        elif code == "expired_card" or card_expiry == "expired":
+            p_base = 0.60
+        elif status == "abandoned" or not checkout_completed:
+            p_base = 0.50
+        elif code == "do_not_honor":
+            p_base = 0.35
+        elif status == "disputed":
+            p_base = 0.20
+        else:
+            p_base = 0.45
+
+        # Customer Loyalty & LTV Adjustments
+        adj_cust = 0.0
+        if prev_success >= 0.85:
+            adj_cust += 0.10
+        elif prev_success < 0.50:
+            adj_cust -= 0.12
+
+        if ltv >= 15000.0:
+            adj_cust += 0.06
+        elif ltv < 1000.0:
+            adj_cust -= 0.04
+
+        if sub_status == "active":
+            adj_cust += 0.06
+        elif sub_status == "canceled":
+            adj_cust -= 0.10
+
+        # Friction & Recency Adjustments
+        adj_frict = 0.0
+        if retry_count >= 3:
+            adj_frict -= 0.10
+        if days_since_success > 30:
+            adj_frict -= 0.06
+        if amount > 20000.0:
+            adj_frict -= 0.04
+
+        prob = round(min(1.0, max(0.0, p_base + adj_cust + adj_frict)), 4)
+
+        # Strategy Determination based on top observable signals
+        if status == "abandoned" or not checkout_completed:
+            strategy = "checkout_abandonment_reminder"
+            reason = "Checkout session abandoned prior to authorization"
             confidence = 0.85
+        elif status == "disputed":
+            strategy = "manual_review"
+            reason = "Chargeback dispute initiated; requires manual review"
+            confidence = 0.80
+        elif code in ["network_timeout", "gateway_error"]:
+            strategy = "smart_retry"
+            reason = "Transient network error; high probability smart retry candidate"
+            confidence = 0.90
+        elif code == "expired_card" or card_expiry == "expired":
+            strategy = "payment_method_update"
+            reason = "Expired payment instrument; update request advised"
+            confidence = 0.85
+        elif prev_success >= 0.70 and retry_count <= 2:
+            strategy = "smart_retry"
+            reason = "Temporary decline for high-reputation customer; smart retry recommended"
+            confidence = 0.82
         else:
             strategy = "personalized_dunning"
-            prob = 0.50
-            is_opp = True
-            reason = "Repeated balance failure; trigger automated personalized dunning"
-            confidence = 0.80
-    elif code == "expired_card" or card_expiry == "expired":
-        strategy = "payment_method_update"
-        prob = 0.70 if sub_status == "active" else 0.40
-        is_opp = True
-        reason = "Card instrument expired; request customer payment method update"
-        confidence = 0.88
-    elif code == "do_not_honor":
-        strategy = "personalized_dunning"
-        prob = 0.30
-        is_opp = True
-        reason = "Issuer generic decline; send cardholder dunning notice"
-        confidence = 0.75
-    else:
-        strategy = "smart_retry"
-        prob = 0.50
-        is_opp = True
-        reason = "Failed payment candidate for automated recovery protocol"
-        confidence = 0.70
+            reason = "Repeated or persistent decline; trigger dunning sequence"
+            confidence = 0.78
 
+    # Opportunity Decision: Threshold at 0.40 probability
+    is_opp = bool(prob >= 0.40 and code not in ["stolen_card", "invalid_card"])
+
+    revenue_at_risk = amount
     expected_recovery = round(revenue_at_risk * prob, 2)
 
     return {
         "risk_score": risk_score,
         "risk_level": risk_level,
         "revenue_at_risk": revenue_at_risk,
-        "recovery_probability": round(prob, 2),
+        "recovery_probability": prob,
         "recommended_strategy": strategy,
         "expected_recovery_amount": expected_recovery,
         "is_opportunity": is_opp,

@@ -84,7 +84,7 @@ export interface RevenueRiskEvent {
   severity: RiskSeverity;
   amount: number;
   amount_at_risk?: number;
-  currency: string;
+  currency?: string;
   risk_score: number;
   status: RiskStatus;
   detected_at: string;
@@ -156,14 +156,18 @@ export interface RecoveryResult {
 
 export interface AuditLog {
   id: string;
-  merchant_id: string;
-  actor_type: ActorType;
-  actor_id: string | null;
+  merchant_id?: string;
+  actor_type?: ActorType;
+  actor_id?: string | null;
   action: string;
-  entity_type: string;
-  entity_id: string | null;
-  changes: Record<string, any>;
-  created_at: string;
+  entity_type?: string;
+  entity_id?: string | null;
+  changes?: Record<string, any>;
+  created_at?: string;
+  user?: string;
+  ip?: string;
+  status?: string;
+  timestamp?: string;
 }
 
 export interface EvaluationRun {
@@ -177,8 +181,13 @@ export interface EvaluationRun {
 }
 
 export interface OverviewMetrics {
-  revenue_at_risk: number;
-  potential_recovery: number;
-  recovered_revenue: number;
-  recovery_rate: number;
+  revenue_at_risk?: number;
+  potential_recovery?: number;
+  recovered_revenue?: number;
+  recovery_rate?: number;
+  totalRiskAmount: number;
+  totalRecoveredAmount: number;
+  activeRiskCount: number;
+  aiDecisionsExecuted: number;
+  recoveryRate: number;
 }

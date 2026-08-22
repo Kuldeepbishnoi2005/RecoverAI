@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -10,15 +10,15 @@ import {
   Zap,
   Clock,
   ChevronRight,
-  RefreshCw,
   SlidersHorizontal
 } from 'lucide-react';
 import { Card } from '../components/common/Card';
 import { Badge } from '../components/common/Badge';
 import { Button } from '../components/common/Button';
 import { Modal } from '../components/common/Modal';
-import { MOCK_SUMMARY, MOCK_RISK_EVENTS, MOCK_AI_DECISIONS } from '../lib/mockData';
-import { RevenueRiskEvent } from '../types';
+import { LoadingSpinner, ErrorBanner, EmptyState } from '../components/common/Feedback';
+import { api } from '../lib/api';
+import { RevenueRiskEvent, OverviewMetrics, AIDecision } from '../types';
 
 export const Overview: React.FC = () => {
   const navigate = useNavigate();
@@ -26,13 +26,60 @@ export const Overview: React.FC = () => {
   const [selectedEvent, setSelectedEvent] = useState<RevenueRiskEvent | null>(null);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
 
+  const [metrics, setMetrics] = useState<OverviewMetrics | null>(null);
+  const [riskEvents, setRiskEvents] = useState<RevenueRiskEvent[]>([]);
+  const [aiDecisions, setAiDecisions] = useState<AIDecision[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchData = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const [mRes, rRes, dRes] = await Promise.all([
+        api.getOverviewMetrics(),
+        api.getRevenueRisk(),
+        api.getAIDecisions()
+      ]);
+      setMetrics(mRes);
+      setRiskEvents(rRes);
+      setAiDecisions(dRes);
+    } catch (err: any) {
+      console.error('Failed to fetch Overview dashboard data:', err);
+      setError(err.message || 'Failed to connect to RecoverAI backend API.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
   const handleRunAudit = () => {
     setIsScanning(true);
     setScanMessage(null);
     setTimeout(() => {
       setIsScanning(false);
       setScanMessage('AI Audit complete: Identified 2 new risk events ($3,340) and initiated autonomous retry schedule.');
+      fetchData();
     }, 1800);
+  };
+
+  if (isLoading) {
+    return <LoadingSpinner label="Loading RecoverAI Overview metrics & risk events..." />;
+  }
+
+  if (error) {
+    return <ErrorBanner message={error} onRetry={fetchData} />;
+  }
+
+  const summary = metrics || {
+    totalRiskAmount: 0,
+    totalRecoveredAmount: 0,
+    activeRiskCount: 0,
+    aiDecisionsExecuted: 0,
+    recoveryRate: 0
   };
 
   return (
@@ -91,14 +138,14 @@ export const Overview: React.FC = () => {
           </div>
           <div className="flex items-baseline justify-between">
             <span className="text-2xl font-display font-bold text-fintech-textPrimary">
-              ${MOCK_SUMMARY.totalRiskAmount.toLocaleString()}
+              ${summary.totalRiskAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
             </span>
             <Badge variant="warning" className="text-[10px]">
-              +12% this week
+              Active
             </Badge>
           </div>
           <p className="text-[11px] text-fintech-blueGray mt-2">
-            Across 38 open risk events
+            Across {summary.activeRiskCount} open risk events
           </p>
         </Card>
 
@@ -112,14 +159,14 @@ export const Overview: React.FC = () => {
           </div>
           <div className="flex items-baseline justify-between">
             <span className="text-2xl font-display font-bold text-fintech-textPrimary">
-              ${MOCK_SUMMARY.totalRecoveredAmount.toLocaleString()}
+              ${summary.totalRecoveredAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
             </span>
             <Badge variant="success" className="text-[10px]">
-              70.2% Rate
+              {summary.recoveryRate.toFixed(1)}% Rate
             </Badge>
           </div>
           <p className="text-[11px] text-fintech-blueGray mt-2">
-            +$24,500 recovered this month
+            Recovered capital via smart engine
           </p>
         </Card>
 
@@ -133,10 +180,10 @@ export const Overview: React.FC = () => {
           </div>
           <div className="flex items-baseline justify-between">
             <span className="text-2xl font-display font-bold text-fintech-textPrimary">
-              {MOCK_SUMMARY.activeRiskCount}
+              {summary.activeRiskCount}
             </span>
             <span className="text-xs text-status-danger font-medium">
-              12 High Severity
+              {riskEvents.filter(e => e.severity === 'critical' || e.severity === 'high').length} High Severity
             </span>
           </div>
           <p className="text-[11px] text-fintech-blueGray mt-2">
@@ -154,7 +201,7 @@ export const Overview: React.FC = () => {
           </div>
           <div className="flex items-baseline justify-between">
             <span className="text-2xl font-display font-bold text-fintech-textPrimary">
-              {MOCK_SUMMARY.aiDecisionsExecuted}
+              {summary.aiDecisionsExecuted}
             </span>
             <Badge variant="ai" className="text-[10px]">
               94.2% Conf.
@@ -251,7 +298,7 @@ export const Overview: React.FC = () => {
                 <span className="w-2.5 h-2.5 rounded-full bg-status-warning inline-block" /> Pending Recovery
               </span>
             </div>
-            <span className="font-mono text-[11px]">Updated 2 mins ago</span>
+            <span className="font-mono text-[11px]">Live Database Feed</span>
           </div>
         </Card>
 
@@ -266,37 +313,41 @@ export const Overview: React.FC = () => {
               <Badge variant="ai" className="text-[10px]">Real-time</Badge>
             </div>
 
-            <div className="space-y-3.5">
-              {MOCK_AI_DECISIONS.map((dec) => (
-                <div
-                  key={dec.id}
-                  onClick={() => navigate('/ai-decisions')}
-                  className="p-3 rounded-elem bg-surface-muted/60 hover:bg-surface-muted border border-fintech-border cursor-pointer transition-colors"
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-mono text-[11px] text-brand-primary font-medium">
-                      {dec.id}
-                    </span>
-                    <Badge variant={dec.status === 'executed' ? 'success' : 'warning'} className="text-[9px]">
-                      {dec.status}
-                    </Badge>
+            {aiDecisions.length === 0 ? (
+              <p className="text-xs text-fintech-textMuted py-4 text-center">No AI decisions recorded yet.</p>
+            ) : (
+              <div className="space-y-3.5">
+                {aiDecisions.slice(0, 3).map((dec) => (
+                  <div
+                    key={dec.id}
+                    onClick={() => navigate('/ai-decisions')}
+                    className="p-3 rounded-elem bg-surface-muted/60 hover:bg-surface-muted border border-fintech-border cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-mono text-[11px] text-brand-primary font-medium truncate max-w-[140px]">
+                        {dec.id}
+                      </span>
+                      <Badge variant={dec.status === 'executed' ? 'success' : 'warning'} className="text-[9px]">
+                        {dec.status}
+                      </Badge>
+                    </div>
+                    <p className="text-xs font-semibold text-fintech-textPrimary capitalize">
+                      {dec.action_type.replace(/_/g, ' ')}
+                    </p>
+                    <p className="text-[11px] text-fintech-textMuted line-clamp-2 mt-1">
+                      {dec.reasoning}
+                    </p>
+                    <div className="mt-2 flex items-center justify-between text-[10px] text-fintech-blueGray">
+                      <span>Confidence: {(dec.confidence_score * 100).toFixed(0)}%</span>
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        {new Date(dec.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
                   </div>
-                  <p className="text-xs font-semibold text-fintech-textPrimary capitalize">
-                    {dec.action_type.replace(/_/g, ' ')}
-                  </p>
-                  <p className="text-[11px] text-fintech-textMuted line-clamp-2 mt-1">
-                    {dec.reasoning}
-                  </p>
-                  <div className="mt-2 flex items-center justify-between text-[10px] text-fintech-blueGray">
-                    <span>Confidence: {(dec.confidence_score * 100).toFixed(0)}%</span>
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {new Date(dec.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <Button
@@ -322,80 +373,87 @@ export const Overview: React.FC = () => {
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={() => navigate('/revenue-risk')}>
-            View All Risk Events ({MOCK_RISK_EVENTS.length})
+            View All Risk Events ({riskEvents.length})
           </Button>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-fintech-textPrimary">
-            <thead className="bg-surface-muted border-b border-fintech-border font-semibold text-fintech-blueGray uppercase text-[10px] tracking-wider">
-              <tr>
-                <th className="px-6 py-3">Event ID</th>
-                <th className="px-6 py-3">Risk Category</th>
-                <th className="px-6 py-3">Customer / Email</th>
-                <th className="px-6 py-3">Amount at Risk</th>
-                <th className="px-6 py-3">Severity</th>
-                <th className="px-6 py-3">Status</th>
-                <th className="px-6 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-fintech-border">
-              {MOCK_RISK_EVENTS.map((event) => (
-                <tr key={event.id} className="hover:bg-surface-muted/50 transition-colors">
-                  <td className="px-6 py-4 font-mono font-medium text-brand-primary">
-                    {event.id}
-                  </td>
-                  <td className="px-6 py-4 capitalize font-medium">
-                    {event.event_type.replace(/_/g, ' ')}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="block font-medium">{event.customer_email}</span>
-                    <span className="block text-[10px] text-fintech-textMuted">{event.customer_id}</span>
-                  </td>
-                  <td className="px-6 py-4 font-semibold text-fintech-textPrimary">
-                    ${event.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </td>
-                  <td className="px-6 py-4">
-                    <Badge
-                      variant={
-                        event.severity === 'critical' || event.severity === 'high'
-                          ? 'danger'
-                          : event.severity === 'medium'
-                          ? 'warning'
-                          : 'neutral'
-                      }
-                    >
-                      {event.severity}
-                    </Badge>
-                  </td>
-                  <td className="px-6 py-4">
-                    <Badge
-                      variant={
-                        event.status === 'resolved'
-                          ? 'success'
-                          : event.status === 'in_recovery'
-                          ? 'info'
-                          : 'warning'
-                      }
-                    >
-                      {event.status.replace(/_/g, ' ')}
-                    </Badge>
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setSelectedEvent(event)}
-                      className="text-brand-primary hover:text-brand-secondary"
-                    >
-                      Inspect Breakdown
-                    </Button>
-                  </td>
+        {riskEvents.length === 0 ? (
+          <EmptyState
+            title="No Active Risk Events"
+            description="All payment pipelines are currently healthy with zero active revenue risk events."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-fintech-textPrimary">
+              <thead className="bg-surface-muted border-b border-fintech-border font-semibold text-fintech-blueGray uppercase text-[10px] tracking-wider">
+                <tr>
+                  <th className="px-6 py-3">Event ID</th>
+                  <th className="px-6 py-3">Risk Category</th>
+                  <th className="px-6 py-3">Customer / Email</th>
+                  <th className="px-6 py-3">Amount at Risk</th>
+                  <th className="px-6 py-3">Severity</th>
+                  <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3 text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-fintech-border">
+                {riskEvents.slice(0, 10).map((event) => (
+                  <tr key={event.id} className="hover:bg-surface-muted/50 transition-colors">
+                    <td className="px-6 py-4 font-mono font-medium text-brand-primary truncate max-w-[120px]">
+                      {event.id}
+                    </td>
+                    <td className="px-6 py-4 capitalize font-medium">
+                      {event.event_type.replace(/_/g, ' ')}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="block font-medium">{event.customer_email}</span>
+                      <span className="block text-[10px] text-fintech-textMuted">{event.customer_id}</span>
+                    </td>
+                    <td className="px-6 py-4 font-semibold text-fintech-textPrimary">
+                      ${event.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-6 py-4">
+                      <Badge
+                        variant={
+                          event.severity === 'critical' || event.severity === 'high'
+                            ? 'danger'
+                            : event.severity === 'medium'
+                            ? 'warning'
+                            : 'neutral'
+                        }
+                      >
+                        {event.severity}
+                      </Badge>
+                    </td>
+                    <td className="px-6 py-4">
+                      <Badge
+                        variant={
+                          event.status === 'resolved'
+                            ? 'success'
+                            : event.status === 'in_recovery'
+                            ? 'info'
+                            : 'warning'
+                        }
+                      >
+                        {event.status.replace(/_/g, ' ')}
+                      </Badge>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSelectedEvent(event)}
+                        className="text-brand-primary hover:text-brand-secondary"
+                      >
+                        Inspect Breakdown
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
 
       {/* Inspect Event Modal */}
@@ -464,3 +522,4 @@ export const Overview: React.FC = () => {
     </div>
   );
 };
+

@@ -76,6 +76,20 @@ async def get_revenue_risk_summary(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/{event_id}", response_model=RiskEventSchema)
+async def get_risk_event(event_id: str):
+    """Retrieve a single revenue risk event by ID."""
+    try:
+        supabase = get_supabase_admin_client()
+        res = supabase.table("revenue_risk_events").select("*").eq("id", event_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Risk event not found")
+        return res.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/{event_id}/trigger-recovery")
 async def trigger_recovery(event_id: str):
     """Trigger autonomous recovery protocol for a given risk event."""
@@ -85,3 +99,4 @@ async def trigger_recovery(event_id: str):
         "action_taken": "smart_retry_schedule",
         "message": f"Autonomous recovery triggered for event {event_id}"
     }
+

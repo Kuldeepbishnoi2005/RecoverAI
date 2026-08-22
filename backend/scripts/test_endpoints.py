@@ -18,7 +18,9 @@ def main():
         ("GET /api/v1/revenue-risk/summary", "/api/v1/revenue-risk/summary"),
         ("GET /api/v1/recovery-opportunities", "/api/v1/recovery-opportunities"),
         ("GET /api/v1/recovery-opportunities/summary", "/api/v1/recovery-opportunities/summary"),
+        ("GET /api/v1/ai-decisions", "/api/v1/ai-decisions"),
         ("GET /api/v1/analytics/overview", "/api/v1/analytics/overview"),
+        ("GET /api/v1/audit-logs", "/api/v1/audit-logs"),
         ("GET /api/v1/evaluation/latest", "/api/v1/evaluation/latest"),
         ("GET /api/v1/evaluation/metrics", "/api/v1/evaluation/metrics")
     ]
@@ -34,3 +36,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

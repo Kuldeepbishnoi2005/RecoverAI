@@ -2,7 +2,9 @@ import os
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
-# Load environment variables from local .env files if present
+backend_env = os.path.join(os.path.dirname(__file__), "..", ".env")
+if os.path.exists(backend_env):
+    load_dotenv(backend_env)
 frontend_env = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", ".env")
 if os.path.exists(frontend_env):
     load_dotenv(frontend_env)
@@ -16,6 +18,7 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str = os.getenv("VITE_SUPABASE_ANON_KEY", DEFAULT_ANON_KEY)
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 
     class Config:
         case_sensitive = True

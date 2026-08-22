@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Search, Filter, AlertTriangle, Play, CheckCircle, RefreshCw } from 'lucide-react';
 import { Card } from '../components/common/Card';
 import { Badge } from '../components/common/Badge';
 import { Button } from '../components/common/Button';
 import { Modal } from '../components/common/Modal';
-import { MOCK_RISK_EVENTS } from '../lib/mockData';
+import { LoadingSpinner, ErrorBanner, EmptyState } from '../components/common/Feedback';
+import { api } from '../lib/api';
 import { RevenueRiskEvent } from '../types';
 
 export const RevenueRisk: React.FC = () => {
@@ -12,27 +13,59 @@ export const RevenueRisk: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
   const [selectedEvent, setSelectedEvent] = useState<RevenueRiskEvent | null>(null);
+  
+  const [riskEvents, setRiskEvents] = useState<RevenueRiskEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const filteredEvents = MOCK_RISK_EVENTS.filter((e) => {
+  const fetchRiskEvents = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const events = await api.getRevenueRisk(statusFilter, severityFilter);
+      setRiskEvents(events);
+    } catch (err: any) {
+      console.error('Failed to fetch revenue risk events:', err);
+      setError(err.message || 'Failed to load revenue risk events from server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRiskEvents();
+  }, [statusFilter, severityFilter]);
+
+  const filteredEvents = riskEvents.filter((e) => {
     const matchesSearch =
       e.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
       e.customer_email.toLowerCase().includes(searchTerm.toLowerCase()) ||
       e.event_type.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || e.status === statusFilter;
-    const matchesSeverity = severityFilter === 'all' || e.severity === severityFilter;
-    return matchesSearch && matchesStatus && matchesSeverity;
+    return matchesSearch;
   });
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-display font-bold text-fintech-textPrimary tracking-tight">
-          Revenue Risk Analysis
-        </h1>
-        <p className="text-xs text-fintech-textMuted mt-1">
-          Identified payment declines, checkout drop-offs, expired cards, and dispute threats.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-display font-bold text-fintech-textPrimary tracking-tight">
+            Revenue Risk Analysis
+          </h1>
+          <p className="text-xs text-fintech-textMuted mt-1">
+            Identified payment declines, checkout drop-offs, expired cards, and dispute threats.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={fetchRiskEvents}
+          disabled={loading}
+          className="gap-1.5 text-xs"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
       </div>
 
       {/* Filter Bar */}
@@ -84,92 +117,113 @@ export const RevenueRisk: React.FC = () => {
         </div>
       </Card>
 
-      {/* Main Table */}
-      <Card padding="none">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-fintech-textPrimary">
-            <thead className="bg-surface-muted border-b border-fintech-border font-semibold text-fintech-blueGray uppercase text-[10px] tracking-wider">
-              <tr>
-                <th className="px-6 py-3">Event ID</th>
-                <th className="px-6 py-3">Risk Category</th>
-                <th className="px-6 py-3">Customer Email</th>
-                <th className="px-6 py-3">Amount at Risk</th>
-                <th className="px-6 py-3">Risk Score</th>
-                <th className="px-6 py-3">Severity</th>
-                <th className="px-6 py-3">Status</th>
-                <th className="px-6 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-fintech-border">
-              {filteredEvents.map((event) => (
-                <tr key={event.id} className="hover:bg-surface-muted/50 transition-colors">
-                  <td className="px-6 py-4 font-mono font-medium text-brand-primary">
-                    {event.id}
-                  </td>
-                  <td className="px-6 py-4 capitalize font-semibold">
-                    {event.event_type.replace(/_/g, ' ')}
-                  </td>
-                  <td className="px-6 py-4 text-fintech-textMuted">
-                    {event.customer_email}
-                  </td>
-                  <td className="px-6 py-4 font-semibold text-fintech-textPrimary">
-                    ${event.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="font-mono text-xs font-bold text-status-warning">
-                      {(event.risk_score * 100).toFixed(0)}%
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <Badge
-                      variant={
-                        event.severity === 'critical' || event.severity === 'high'
-                          ? 'danger'
-                          : event.severity === 'medium'
-                          ? 'warning'
-                          : 'neutral'
-                      }
-                    >
-                      {event.severity}
-                    </Badge>
-                  </td>
-                  <td className="px-6 py-4">
-                    <Badge
-                      variant={
-                        event.status === 'resolved'
-                          ? 'success'
-                          : event.status === 'in_recovery'
-                          ? 'info'
-                          : 'warning'
-                      }
-                    >
-                      {event.status.replace(/_/g, ' ')}
-                    </Badge>
-                  </td>
-                  <td className="px-6 py-4 text-right space-x-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setSelectedEvent(event)}
-                      className="text-brand-primary"
-                    >
-                      Details
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => alert(`Initiated autonomous intervention for ${event.id}`)}
-                    >
-                      <Play className="w-3 h-3 mr-1 text-brand-secondary" />
-                      Recover
-                    </Button>
-                  </td>
+      {/* Main Content Area with Error, Loading, and Table */}
+      {error && <ErrorBanner message={error} onRetry={fetchRiskEvents} />}
+
+      {loading ? (
+        <Card padding="lg">
+          <LoadingSpinner label="Loading live revenue risk events..." />
+        </Card>
+      ) : filteredEvents.length === 0 ? (
+        <Card padding="lg">
+          <EmptyState
+            title="No Risk Events Found"
+            description={
+              searchTerm || statusFilter !== 'all' || severityFilter !== 'all'
+                ? "No revenue risk events match your selected search criteria and filters."
+                : "No revenue risk events have been recorded yet."
+            }
+            onAction={fetchRiskEvents}
+            actionLabel="Reload Events"
+          />
+        </Card>
+      ) : (
+        <Card padding="none">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-fintech-textPrimary">
+              <thead className="bg-surface-muted border-b border-fintech-border font-semibold text-fintech-blueGray uppercase text-[10px] tracking-wider">
+                <tr>
+                  <th className="px-6 py-3">Event ID</th>
+                  <th className="px-6 py-3">Risk Category</th>
+                  <th className="px-6 py-3">Customer Email</th>
+                  <th className="px-6 py-3">Amount at Risk</th>
+                  <th className="px-6 py-3">Risk Score</th>
+                  <th className="px-6 py-3">Severity</th>
+                  <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3 text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+              </thead>
+              <tbody className="divide-y divide-fintech-border">
+                {filteredEvents.map((event) => (
+                  <tr key={event.id} className="hover:bg-surface-muted/50 transition-colors">
+                    <td className="px-6 py-4 font-mono font-medium text-brand-primary">
+                      {event.id}
+                    </td>
+                    <td className="px-6 py-4 capitalize font-semibold">
+                      {event.event_type.replace(/_/g, ' ')}
+                    </td>
+                    <td className="px-6 py-4 text-fintech-textMuted">
+                      {event.customer_email}
+                    </td>
+                    <td className="px-6 py-4 font-semibold text-fintech-textPrimary">
+                      ${event.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="font-mono text-xs font-bold text-status-warning">
+                        {(event.risk_score * 100).toFixed(0)}%
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <Badge
+                        variant={
+                          event.severity === 'critical' || event.severity === 'high'
+                            ? 'danger'
+                            : event.severity === 'medium'
+                            ? 'warning'
+                            : 'neutral'
+                        }
+                      >
+                        {event.severity}
+                      </Badge>
+                    </td>
+                    <td className="px-6 py-4">
+                      <Badge
+                        variant={
+                          event.status === 'resolved'
+                            ? 'success'
+                            : event.status === 'in_recovery'
+                            ? 'info'
+                            : 'warning'
+                        }
+                      >
+                        {event.status.replace(/_/g, ' ')}
+                      </Badge>
+                    </td>
+                    <td className="px-6 py-4 text-right space-x-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSelectedEvent(event)}
+                        className="text-brand-primary"
+                      >
+                        Details
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => alert(`Initiated autonomous intervention for ${event.id}`)}
+                      >
+                        <Play className="w-3 h-3 mr-1 text-brand-secondary" />
+                        Recover
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {/* Event Details Modal */}
       {selectedEvent && (
@@ -224,3 +278,4 @@ export const RevenueRisk: React.FC = () => {
     </div>
   );
 };
+

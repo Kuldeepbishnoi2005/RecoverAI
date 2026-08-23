@@ -11,6 +11,7 @@ import {
   Settings,
   HelpCircle,
   ShieldCheck,
+  UserCheck,
   ChevronDown
 } from 'lucide-react';
 import { Badge } from '../common/Badge';
@@ -47,6 +48,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       sectionTitle: 'INTELLIGENCE',
       items: [
         { label: 'AI Decisions', path: '/ai-decisions', icon: <Brain className="w-4 h-4" />, badge: 'AI' },
+        { label: 'Manual Review', path: '/manual-review', icon: <UserCheck className="w-4 h-4" />, badge: 'Review' },
         { label: 'Analytics', path: '/analytics', icon: <BarChart3 className="w-4 h-4" /> },
         { label: 'Audit Logs', path: '/audit-logs', icon: <FileCheck2 className="w-4 h-4" /> },
       ],

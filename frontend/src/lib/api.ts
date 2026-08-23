@@ -4,7 +4,10 @@ import {
   RecoveryOpportunity,
   AIDecision,
   AuditLog,
-  OverviewMetrics
+  OverviewMetrics,
+  ManualReviewQueueItem,
+  ApproveRequestPayload,
+  RejectRequestPayload
 } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -154,6 +157,87 @@ export const api = {
       status: a.status || a.changes?.status || 'SUCCESS',
       timestamp: a.timestamp || a.created_at || new Date().toISOString()
     }));
+  },
+
+  async getManualReviewQueue(merchantId?: string): Promise<{ items: ManualReviewQueueItem[]; total: number }> {
+    const query = merchantId ? `?merchant_id=${merchantId}` : '';
+    return fetchJson<{ items: ManualReviewQueueItem[]; total: number }>(`/api/v1/manual-review/queue${query}`);
+  },
+
+  async getManualReviewDetail(actionId: string): Promise<any> {
+    return fetchJson<any>(`/api/v1/manual-review/${actionId}`);
+  },
+
+  async approveManualReview(actionId: string, payload: ApproveRequestPayload): Promise<any> {
+    const res = await fetch(`${API_BASE}/api/v1/manual-review/${actionId}/approve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(payload.idempotency_key ? { 'X-Idempotency-Key': payload.idempotency_key } : {})
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.detail || `Approval Error ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  },
+
+  async rejectManualReview(actionId: string, payload: RejectRequestPayload): Promise<any> {
+    const res = await fetch(`${API_BASE}/api/v1/manual-review/${actionId}/reject`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.detail || `Rejection Error ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  },
+
+  manualReview: {
+    async getQueue(merchantId?: string): Promise<ManualReviewQueueItem[]> {
+      const query = merchantId ? `?merchant_id=${merchantId}` : '';
+      const res = await fetchJson<{ items: ManualReviewQueueItem[]; total: number }>(`/api/v1/manual-review/queue${query}`);
+      return res.items || [];
+    },
+    async getActionDetails(actionId: string): Promise<any> {
+      return fetchJson<any>(`/api/v1/manual-review/${actionId}`);
+    },
+    async approveAction(actionId: string, payload: ApproveRequestPayload, idempotencyKey?: string): Promise<any> {
+      const key = idempotencyKey || payload.idempotency_key;
+      const res = await fetch(`${API_BASE}/api/v1/manual-review/${actionId}/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(key ? { 'X-Idempotency-Key': key } : {})
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Approval Error ${res.status}: ${res.statusText}`);
+      }
+      return res.json();
+    },
+    async rejectAction(actionId: string, payload: RejectRequestPayload): Promise<any> {
+      const res = await fetch(`${API_BASE}/api/v1/manual-review/${actionId}/reject`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Rejection Error ${res.status}: ${res.statusText}`);
+      }
+      return res.json();
+    }
   }
 };
 

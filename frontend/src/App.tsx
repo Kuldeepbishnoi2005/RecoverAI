@@ -8,6 +8,7 @@ import { Transactions } from './pages/Transactions';
 import { AIDecisions } from './pages/AIDecisions';
 import { Analytics } from './pages/Analytics';
 import { AuditLogs } from './pages/AuditLogs';
+import { ManualReview } from './pages/ManualReview';
 import { Settings } from './pages/Settings';
 import { Help } from './pages/Help';
 
@@ -22,6 +23,7 @@ export function App() {
           <Route path="recovery-opportunities" element={<RecoveryOpportunities />} />
           <Route path="transactions" element={<Transactions />} />
           <Route path="ai-decisions" element={<AIDecisions />} />
+          <Route path="manual-review" element={<ManualReview />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="audit-logs" element={<AuditLogs />} />
           <Route path="settings" element={<Settings />} />

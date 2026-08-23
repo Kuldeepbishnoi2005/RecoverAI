@@ -8,7 +8,8 @@ from app.routers import (
     ai_decisions,
     analytics,
     audit_logs,
-    evaluation
+    evaluation,
+    manual_review
 )
 
 app = FastAPI(
@@ -33,6 +34,7 @@ app.include_router(ai_decisions.router, prefix=settings.API_V1_STR)
 app.include_router(analytics.router, prefix=settings.API_V1_STR)
 app.include_router(audit_logs.router, prefix=settings.API_V1_STR)
 app.include_router(evaluation.router, prefix=settings.API_V1_STR)
+app.include_router(manual_review.router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 async def root():

@@ -48,8 +48,10 @@ export interface Transaction {
   currency: string;
   status: TransactionStatus;
   gateway: string;
+  payment_gateway?: string;
   gateway_transaction_id?: string;
   error_code?: string;
+  error_message?: string;
   risk_flag?: boolean;
   payment_method?: string | null;
   failure_reason?: string | null;
@@ -190,4 +192,46 @@ export interface OverviewMetrics {
   activeRiskCount: number;
   aiDecisionsExecuted: number;
   recoveryRate: number;
+}
+
+export interface ManualReviewQueueItem {
+  id: string;
+  action_id: string;
+  transaction_id: string;
+  merchant_id: string;
+  strategy: string;
+  action_type?: string;
+  status: ActionStatus | string;
+  attempted_amount: number;
+  amount?: number;
+  currency?: string;
+  risk_score: number;
+  policy_reason: string;
+  reason?: string;
+  execution_strategy?: string;
+  policy_check_results?: { reason?: string };
+  created_at: string;
+  transaction?: Transaction;
+}
+
+export interface ManualReviewActionDetail {
+  action: ManualReviewQueueItem;
+  transaction?: Transaction;
+  ai_decision?: AIDecision;
+}
+
+export interface ApproveRequestPayload {
+  override_strategy?: string;
+  actor?: string;
+  approver_id?: string;
+  approver_role?: string;
+  notes?: string;
+  idempotency_key?: string;
+}
+
+export interface RejectRequestPayload {
+  rejection_reason: string;
+  actor?: string;
+  rejected_by?: string;
+  approver_role?: string;
 }

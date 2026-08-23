@@ -59,7 +59,7 @@ def _persist_pipeline_records(
         }
         supabase.table("ai_decisions").insert(ai_decision_payload).execute()
 
-        # 2. Insert simulation result if executed
+        # 2. Insert recovery action record
         if sim_res:
             try:
                 action_id_uuid = str(uuid.UUID(sim_res.action_id))
@@ -98,6 +98,36 @@ def _persist_pipeline_records(
                 "created_at": sim_res.execution_timestamp
             }
             supabase.table("recovery_results").insert(result_payload).execute()
+        elif policy_res.requires_human_approval or ai_decision.decision == "MANUAL_REVIEW":
+            action_id_uuid = str(uuid.uuid4())
+            action_payload = {
+                "id": action_id_uuid,
+                "transaction_id": tx_id,
+                "merchant_id": merchant_id,
+                "strategy": ai_decision.strategy if ai_decision.strategy != "MANUAL_REVIEW" else "RETRY_WITH_SMART_ROUTING",
+                "action_type": ai_decision.strategy if ai_decision.strategy != "MANUAL_REVIEW" else "RETRY_WITH_SMART_ROUTING",
+                "status": "PENDING_APPROVAL",
+                "policy_reason": policy_res.reason,
+                "attempted_amount": float(transaction.get("amount", 0.0) or 0.0),
+                "pipeline_run_id": pipeline_run_id,
+                "created_at": now_str
+            }
+            supabase.table("recovery_actions").insert(action_payload).execute()
+        else:
+            action_id_uuid = str(uuid.uuid4())
+            action_payload = {
+                "id": action_id_uuid,
+                "transaction_id": tx_id,
+                "merchant_id": merchant_id,
+                "strategy": ai_decision.strategy,
+                "action_type": ai_decision.strategy,
+                "status": "CANCELLED_SAFEGUARD",
+                "policy_reason": policy_res.reason,
+                "attempted_amount": float(transaction.get("amount", 0.0) or 0.0),
+                "pipeline_run_id": pipeline_run_id,
+                "created_at": now_str
+            }
+            supabase.table("recovery_actions").insert(action_payload).execute()
 
         try:
             entity_id_val = str(uuid.UUID(tx_id))

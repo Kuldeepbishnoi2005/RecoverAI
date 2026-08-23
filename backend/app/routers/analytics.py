@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional
 from pydantic import BaseModel
 from app.db import get_supabase_admin_client
+from app.auth.deps import get_current_user, AuthenticatedUser
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
@@ -14,25 +15,21 @@ class OverviewMetricsSchema(BaseModel):
 
 @router.get("/overview", response_model=OverviewMetricsSchema)
 async def get_analytics_overview(
-    merchant_id: Optional[str] = Query(None)
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
-    """Calculate overview analytics dynamically from database records."""
+    """Calculate overview analytics dynamically from database records for authenticated merchant."""
     try:
         supabase = get_supabase_admin_client()
 
         # Query recovery_results
-        rr_query = supabase.table("recovery_results").select("recovered_amount, is_successful")
-        if merchant_id:
-            rr_query = rr_query.eq("merchant_id", merchant_id)
+        rr_query = supabase.table("recovery_results").select("recovered_amount, is_successful").eq("merchant_id", user.merchant_id)
         rr_res = rr_query.execute()
         rr_data = rr_res.data or []
 
         total_recovered = sum(float(r.get("recovered_amount", 0.0) or 0.0) for r in rr_data if r.get("is_successful"))
 
         # Query revenue_risk_events
-        rre_query = supabase.table("revenue_risk_events").select("amount_at_risk, status")
-        if merchant_id:
-            rre_query = rre_query.eq("merchant_id", merchant_id)
+        rre_query = supabase.table("revenue_risk_events").select("amount_at_risk, status").eq("merchant_id", user.merchant_id)
         rre_res = rre_query.execute()
         rre_data = rre_res.data or []
 
@@ -40,9 +37,7 @@ async def get_analytics_overview(
         active_risk_events = sum(1 for r in rre_data if r.get("status") in ["detected", "open", "in_recovery"])
 
         # Query recovery_actions
-        ra_query = supabase.table("recovery_actions").select("id")
-        if merchant_id:
-            ra_query = ra_query.eq("merchant_id", merchant_id)
+        ra_query = supabase.table("recovery_actions").select("id").eq("merchant_id", user.merchant_id)
         ra_res = ra_query.execute()
         ra_data = ra_res.data or []
 

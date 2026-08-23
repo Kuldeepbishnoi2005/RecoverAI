@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from app.db import get_supabase_admin_client
+from app.auth.deps import get_current_user, AuthenticatedUser
 
 router = APIRouter(prefix="/recovery-opportunities", tags=["Recovery Opportunities"])
 
@@ -19,16 +20,14 @@ class RecoveryActionSchema(BaseModel):
 
 @router.get("/", response_model=List[RecoveryActionSchema])
 async def list_recovery_opportunities(
-    merchant_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=100)
+    limit: int = Query(50, ge=1, le=100),
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
-    """Retrieve database recovery opportunities / actions."""
+    """Retrieve database recovery opportunities / actions for authenticated merchant."""
     try:
         supabase = get_supabase_admin_client()
-        query = supabase.table("recovery_actions").select("*")
-        if merchant_id:
-            query = query.eq("merchant_id", merchant_id)
+        query = supabase.table("recovery_actions").select("*").eq("merchant_id", user.merchant_id)
         if status:
             query = query.eq("status", status)
         res = query.order("created_at", desc=True).limit(limit).execute()
@@ -38,14 +37,12 @@ async def list_recovery_opportunities(
 
 @router.get("/summary")
 async def get_recovery_opportunities_summary(
-    merchant_id: Optional[str] = Query(None)
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
-    """Retrieves database-backed summary of recovery opportunities / actions."""
+    """Retrieves database-backed summary of recovery opportunities / actions for authenticated merchant."""
     try:
         supabase = get_supabase_admin_client()
-        query = supabase.table("recovery_actions").select("action_type, status, parameters")
-        if merchant_id:
-            query = query.eq("merchant_id", merchant_id)
+        query = supabase.table("recovery_actions").select("action_type, status, parameters").eq("merchant_id", user.merchant_id)
         res = query.execute()
         data = res.data or []
 

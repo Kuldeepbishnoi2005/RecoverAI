@@ -2,8 +2,9 @@ import uuid
 import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Query, Header, status
+from fastapi import APIRouter, HTTPException, Query, Header, status, Depends
 from pydantic import BaseModel, Field
+from app.auth.deps import get_current_user, AuthenticatedUser
 
 from app.db import get_supabase_admin_client
 from app.recovery.state_machine import (
@@ -118,27 +119,24 @@ def expire_stale_manual_reviews(merchant_id: Optional[str] = None) -> int:
 
 @router.get("/queue")
 async def get_manual_review_queue(
-    merchant_id: Optional[str] = Query(None),
     min_risk_score: Optional[float] = Query(None),
     max_amount: Optional[float] = Query(None),
     limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
     """
-    Returns items currently awaiting manual review in PENDING_APPROVAL state.
+    Returns items currently awaiting manual review in PENDING_APPROVAL state for authenticated merchant.
     Triggers lazy expiration of stale items older than 72h.
     """
     try:
-        # Step 1: Run lazy expiration
-        expire_stale_manual_reviews(merchant_id=merchant_id)
+        # Step 1: Run lazy expiration for user's merchant
+        expire_stale_manual_reviews(merchant_id=user.merchant_id)
 
         supabase = get_supabase_admin_client()
 
-        # Query recovery_actions in PENDING_APPROVAL or legacy pending status
-        query = supabase.table("recovery_actions").select("*").in_("status", ["PENDING_APPROVAL", "pending"])
-        
-        if merchant_id:
-            query = query.eq("merchant_id", merchant_id)
+        # Query recovery_actions in PENDING_APPROVAL or legacy pending status for user's merchant
+        query = supabase.table("recovery_actions").select("*").in_("status", ["PENDING_APPROVAL", "pending"]).eq("merchant_id", user.merchant_id)
 
         res = query.order("created_at", desc=True).execute()
         all_actions = res.data or []
@@ -196,13 +194,16 @@ async def get_manual_review_queue(
 
 
 @router.get("/{action_id}")
-async def get_manual_review_item(action_id: str):
+async def get_manual_review_item(
+    action_id: str,
+    user: AuthenticatedUser = Depends(get_current_user)
+):
     """
-    Returns complete details for a single recovery action item in manual review.
+    Returns complete details for a single recovery action item in manual review for authenticated merchant.
     """
     try:
         supabase = get_supabase_admin_client()
-        res = supabase.table("recovery_actions").select("*").eq("id", action_id).execute()
+        res = supabase.table("recovery_actions").select("*").eq("id", action_id).eq("merchant_id", user.merchant_id).execute()
         if not res.data:
             raise HTTPException(status_code=404, detail=f"Recovery action '{action_id}' not found")
         
@@ -250,7 +251,8 @@ async def get_manual_review_item(action_id: str):
 async def approve_manual_review(
     action_id: str,
     payload: ApproveRequest,
-    x_idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key")
+    x_idempotency_key: Optional[str] = Header(None, alias="X-Idempotency-Key"),
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
     """
     Approves a PENDING_APPROVAL recovery action, applying safety checks & idempotency,
@@ -259,10 +261,11 @@ async def approve_manual_review(
     try:
         supabase = get_supabase_admin_client()
 
-        # Step 1: Fetch recovery action record
-        res = supabase.table("recovery_actions").select("*").eq("id", action_id).execute()
+        # Step 1: Fetch recovery action record scoped to authenticated user's merchant
+        res = supabase.table("recovery_actions").select("*").eq("id", action_id).eq("merchant_id", user.merchant_id).execute()
         if not res.data:
             raise HTTPException(status_code=404, detail=f"Recovery action '{action_id}' not found")
+
 
         act = res.data[0]
         current_status = act.get("status")
@@ -557,17 +560,22 @@ async def approve_manual_review(
 
 
 @router.post("/{action_id}/reject")
-async def reject_manual_review(action_id: str, payload: RejectRequest):
+async def reject_manual_review(
+    action_id: str,
+    payload: RejectRequest,
+    user: AuthenticatedUser = Depends(get_current_user)
+):
     """
     Rejects a PENDING_APPROVAL recovery action with rejection reason logging.
     """
     try:
         supabase = get_supabase_admin_client()
 
-        # Step 1: Fetch recovery action record
-        res = supabase.table("recovery_actions").select("*").eq("id", action_id).execute()
+        # Step 1: Fetch recovery action record scoped to authenticated user's merchant
+        res = supabase.table("recovery_actions").select("*").eq("id", action_id).eq("merchant_id", user.merchant_id).execute()
         if not res.data:
             raise HTTPException(status_code=404, detail=f"Recovery action '{action_id}' not found")
+
 
         act = res.data[0]
         current_status = act.get("status")

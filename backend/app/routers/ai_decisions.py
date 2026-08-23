@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import List, Optional
 from pydantic import BaseModel
 from app.db import get_supabase_admin_client
+from app.auth.deps import get_current_user, AuthenticatedUser
 
 router = APIRouter(prefix="/ai-decisions", tags=["AI Decisions"])
 
@@ -20,15 +21,13 @@ class AIDecisionSchema(BaseModel):
 
 @router.get("/", response_model=List[AIDecisionSchema])
 async def list_ai_decisions(
-    merchant_id: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=100)
+    limit: int = Query(50, ge=1, le=100),
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
-    """Retrieve database AI decision records."""
+    """Retrieve database AI decision records for authenticated merchant."""
     try:
         supabase = get_supabase_admin_client()
-        query = supabase.table("ai_decisions").select("*")
-        if merchant_id:
-            query = query.eq("merchant_id", merchant_id)
+        query = supabase.table("ai_decisions").select("*").eq("merchant_id", user.merchant_id)
         res = query.order("created_at", desc=True).limit(limit).execute()
         return res.data or []
     except Exception as e:

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from app.db import get_supabase_admin_client
+from app.auth.deps import get_current_user, AuthenticatedUser
 
 router = APIRouter(prefix="/revenue-risk", tags=["Revenue Risk"])
 
@@ -20,17 +21,15 @@ class RiskEventSchema(BaseModel):
 
 @router.get("/", response_model=List[RiskEventSchema])
 async def list_risk_events(
-    merchant_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     severity: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=100)
+    limit: int = Query(50, ge=1, le=100),
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
     """Retrieve database revenue risk events."""
     try:
         supabase = get_supabase_admin_client()
-        query = supabase.table("revenue_risk_events").select("*")
-        if merchant_id:
-            query = query.eq("merchant_id", merchant_id)
+        query = supabase.table("revenue_risk_events").select("*").eq("merchant_id", user.merchant_id)
         if status:
             query = query.eq("status", status)
         if severity:
@@ -42,14 +41,12 @@ async def list_risk_events(
 
 @router.get("/summary")
 async def get_revenue_risk_summary(
-    merchant_id: Optional[str] = Query(None)
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
     """Retrieves database-backed summary of revenue risk events."""
     try:
         supabase = get_supabase_admin_client()
-        query = supabase.table("revenue_risk_events").select("severity, status, amount_at_risk")
-        if merchant_id:
-            query = query.eq("merchant_id", merchant_id)
+        query = supabase.table("revenue_risk_events").select("severity, status, amount_at_risk").eq("merchant_id", user.merchant_id)
         res = query.execute()
         data = res.data or []
 
@@ -77,11 +74,14 @@ async def get_revenue_risk_summary(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{event_id}", response_model=RiskEventSchema)
-async def get_risk_event(event_id: str):
+async def get_risk_event(
+    event_id: str,
+    user: AuthenticatedUser = Depends(get_current_user)
+):
     """Retrieve a single revenue risk event by ID."""
     try:
         supabase = get_supabase_admin_client()
-        res = supabase.table("revenue_risk_events").select("*").eq("id", event_id).execute()
+        res = supabase.table("revenue_risk_events").select("*").eq("id", event_id).eq("merchant_id", user.merchant_id).execute()
         if not res.data:
             raise HTTPException(status_code=404, detail="Risk event not found")
         return res.data[0]
@@ -91,12 +91,23 @@ async def get_risk_event(event_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{event_id}/trigger-recovery")
-async def trigger_recovery(event_id: str):
+async def trigger_recovery(
+    event_id: str,
+    user: AuthenticatedUser = Depends(get_current_user)
+):
     """Trigger autonomous recovery protocol for a given risk event."""
-    return {
-        "status": "success",
-        "event_id": event_id,
-        "action_taken": "smart_retry_schedule",
-        "message": f"Autonomous recovery triggered for event {event_id}"
-    }
-
+    try:
+        supabase = get_supabase_admin_client()
+        res = supabase.table("revenue_risk_events").select("*").eq("id", event_id).eq("merchant_id", user.merchant_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Risk event not found")
+        return {
+            "status": "success",
+            "event_id": event_id,
+            "action_taken": "smart_retry_schedule",
+            "message": f"Autonomous recovery triggered for event {event_id}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

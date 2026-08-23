@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import List, Optional
 from pydantic import BaseModel
 from app.db import get_supabase_admin_client
+from app.auth.deps import get_current_user, AuthenticatedUser
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
 
@@ -22,16 +23,14 @@ class TransactionSchema(BaseModel):
 
 @router.get("/", response_model=List[TransactionSchema])
 async def list_transactions(
-    merchant_id: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=100)
+    limit: int = Query(50, ge=1, le=100),
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
-    """Retrieve database transactions."""
+    """Retrieve database transactions for authenticated merchant."""
     try:
         supabase = get_supabase_admin_client()
-        query = supabase.table("transactions").select("*")
-        if merchant_id:
-            query = query.eq("merchant_id", merchant_id)
+        query = supabase.table("transactions").select("*").eq("merchant_id", user.merchant_id)
         if status:
             query = query.eq("status", status)
         res = query.order("created_at", desc=True).limit(limit).execute()

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import List, Optional
 from pydantic import BaseModel
 from app.db import get_supabase_admin_client
+from app.auth.deps import get_current_user, AuthenticatedUser
 
 router = APIRouter(prefix="/audit-logs", tags=["Audit Logs"])
 
@@ -18,15 +19,13 @@ class AuditLogSchema(BaseModel):
 
 @router.get("/", response_model=List[AuditLogSchema])
 async def list_audit_logs(
-    merchant_id: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=100)
+    limit: int = Query(50, ge=1, le=100),
+    user: AuthenticatedUser = Depends(get_current_user)
 ):
-    """Retrieve database audit log records."""
+    """Retrieve database audit log records for authenticated merchant."""
     try:
         supabase = get_supabase_admin_client()
-        query = supabase.table("audit_logs").select("*")
-        if merchant_id:
-            query = query.eq("merchant_id", merchant_id)
+        query = supabase.table("audit_logs").select("*").eq("merchant_id", user.merchant_id)
         res = query.order("created_at", desc=True).limit(limit).execute()
         return res.data or []
     except Exception as e:

@@ -235,3 +235,20 @@ export interface RejectRequestPayload {
   rejected_by?: string;
   approver_role?: string;
 }
+
+export interface MerchantSettings {
+  id: string;
+  merchant_id: string;
+  autonomous_mode: boolean;
+  min_ai_confidence_threshold: number;
+  default_gateway: string;
+  webhook_secret_masked: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface DLQActionItem extends ManualReviewQueueItem {
+  retry_count: number;
+  last_error: string;
+  is_dlq: boolean;
+}

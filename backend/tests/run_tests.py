@@ -19,6 +19,7 @@ from tests.test_phase2_engine import (
 
 from tests.test_phase3_safety import run_all_safety_tests
 from tests.test_phase7_ingestion import run_all_ingestion_tests
+from tests.test_phase8_resilience import run_all_phase8_tests
 
 def main():
     print("--- RUNNING PHASE 2.5 DECOUPLED ENGINE AUTOMATED TEST SUITE ---")
@@ -60,6 +61,13 @@ def main():
         run_all_ingestion_tests()
     except Exception as e:
         print(f"[FAIL] Ingestion tests error: {e}")
+        failed += 1
+
+    print("\n--- RUNNING PHASE 8 RESILIENCE TEST SUITE ---")
+    try:
+        run_all_phase8_tests()
+    except Exception as e:
+        print(f"[FAIL] Phase 8 resilience tests error: {e}")
         failed += 1
 
     if failed > 0:

@@ -22,6 +22,8 @@ from app.ai.schemas import (
     RiskEngineContext
 )
 
+from app.adapters import get_gateway_adapter
+
 logger = logging.getLogger("app.routers.manual_review")
 
 router = APIRouter(prefix="/manual-review", tags=["Manual Review"])
@@ -644,4 +646,251 @@ async def reject_manual_review(
         raise
     except Exception as e:
         logger.error(f"Error rejecting manual review action '{action_id}': {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dlq")
+async def list_dlq_actions(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    user: AuthenticatedUser = Depends(get_current_user)
+):
+    """
+    Retrieve recovery actions currently in Dead-Letter Queue (DLQ) or EXECUTED_FAILED state for authenticated merchant.
+    """
+    try:
+        supabase = get_supabase_admin_client()
+        query = supabase.table("recovery_actions").select("*").eq("merchant_id", user.merchant_id).or_("is_dlq.eq.true,status.eq.EXECUTED_FAILED")
+
+        res = query.order("created_at", desc=True).execute()
+        raw_items = res.data or []
+
+        enriched_items = []
+        for act in raw_items:
+            tx_id = act.get("transaction_id")
+            tx_data = {}
+            if tx_id:
+                try:
+                    tx_res = supabase.table("transactions").select("*").eq("transaction_id", tx_id).execute()
+                    if tx_res.data:
+                        tx_data = tx_res.data[0]
+                except Exception:
+                    pass
+
+            item = {
+                "id": act.get("id"),
+                "action_id": act.get("id"),
+                "transaction_id": tx_id,
+                "merchant_id": act.get("merchant_id"),
+                "strategy": act.get("strategy") or act.get("action_type") or "RETRY_WITH_SMART_ROUTING",
+                "status": act.get("status"),
+                "attempted_amount": float(tx_data.get("amount", act.get("attempted_amount", 0.0)) or 0.0),
+                "retry_count": act.get("retry_count", 0),
+                "last_error": act.get("last_error") or act.get("policy_reason") or "Execution failure",
+                "is_dlq": bool(act.get("is_dlq", True)),
+                "created_at": act.get("created_at"),
+                "transaction": tx_data
+            }
+            enriched_items.append(item)
+
+        total_count = len(enriched_items)
+        paged_items = enriched_items[offset : offset + limit]
+
+        return {
+            "items": paged_items,
+            "total": total_count,
+            "limit": limit,
+            "offset": offset
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving DLQ list: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ReplayRequest(BaseModel):
+    actor: str = "merchant_admin"
+    notes: Optional[str] = None
+    force_gateway: Optional[str] = None
+
+
+@router.post("/{action_id}/replay")
+async def replay_recovery_action(
+    action_id: str,
+    payload: Optional[ReplayRequest] = None,
+    user: AuthenticatedUser = Depends(get_current_user)
+):
+    """
+    Manual replay endpoint for failed recovery actions in DLQ.
+    Executes via Gateway Adapter, updates retry counts and DLQ status, and logs audit trail.
+    """
+    req_actor = payload.actor if payload else "merchant_admin"
+    req_notes = payload.notes if payload else "Manual action replay initiated"
+
+    try:
+        supabase = get_supabase_admin_client()
+
+        # Step 1: Fetch recovery action record scoped to authenticated user's merchant
+        res = supabase.table("recovery_actions").select("*").eq("id", action_id).eq("merchant_id", user.merchant_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail=f"Recovery action '{action_id}' not found")
+
+        act = res.data[0]
+        tx_id = act.get("transaction_id")
+        current_retry = int(act.get("retry_count", 0) or 0)
+        # Fetch transaction details
+        tx_data = {}
+        if tx_id:
+            try:
+                tx_res = supabase.table("transactions").select("*").eq("transaction_id", tx_id).execute()
+                if tx_res.data:
+                    tx_data = tx_res.data[0]
+            except Exception:
+                pass
+
+        # Step 2: Fetch merchant settings to know gateway provider
+        gateway_provider = "sandbox"
+        if payload and payload.force_gateway:
+            gateway_provider = payload.force_gateway
+        else:
+            try:
+                ms_res = supabase.table("merchant_settings").select("default_gateway").eq("merchant_id", user.merchant_id).execute()
+                if ms_res.data and len(ms_res.data) > 0:
+                    gateway_provider = ms_res.data[0].get("default_gateway", "sandbox")
+            except Exception:
+                pass
+
+        # Step 3: Instantiate Adapter and execute replay
+        adapter = get_gateway_adapter(gateway_provider)
+        action_type = act.get("strategy") or act.get("action_type") or "RETRY_WITH_SMART_ROUTING"
+        amount = float(tx_data.get("amount", act.get("attempted_amount", 0.0)) or 0.0)
+        currency = tx_data.get("currency", "INR")
+        adapter_res = adapter.execute_action(
+            action_type=action_type,
+            amount=amount,
+            currency=currency,
+            payload={
+                "transaction_id": tx_id,
+                "action_id": action_id,
+                "merchant_id": user.merchant_id,
+                "replay_note": req_notes,
+            }
+        )
+
+        now_str = datetime.utcnow().isoformat()
+        new_retry_count = current_retry + 1
+
+        if adapter_res.success:
+            update_data = {
+                "status": "EXECUTED_SUCCESS",
+                "is_dlq": False,
+                "retry_count": new_retry_count,
+                "last_error": None,
+                "success": True,
+                "recovered_amount": amount,
+                "executed_at": now_str
+            }
+            supabase.table("recovery_actions").update(update_data).eq("id", action_id).execute()
+
+            # Record result
+            try:
+                res_payload = {
+                    "id": str(uuid.uuid4()),
+                    "merchant_id": user.merchant_id,
+                    "recovery_action_id": action_id,
+                    "transaction_id": tx_id,
+                    "recovered_amount": amount,
+                    "is_successful": True,
+                    "result_details": {
+                        "gateway": adapter.provider_name,
+                        "transaction_id": adapter_res.transaction_id,
+                        "replayed_by": req_actor
+                    },
+                    "measured_at": now_str,
+                    "created_at": now_str
+                }
+                supabase.table("recovery_results").insert(res_payload).execute()
+            except Exception:
+                pass
+
+            # Insert Audit Log
+            audit_payload = {
+                "merchant_id": user.merchant_id,
+                "actor_type": "user",
+                "actor_id": user.user_id,
+                "action": "RECOVERY_ACTION_REPLAY_SUCCESS",
+                "action_type": "RECOVERY_ACTION_REPLAY_SUCCESS",
+                "entity_type": "recovery_action",
+                "entity_id": action_id,
+                "actor": req_actor,
+                "details": {
+                    "action_id": action_id,
+                    "transaction_id": tx_id,
+                    "gateway": adapter.provider_name,
+                    "transaction_id_gateway": adapter_res.transaction_id,
+                    "retry_count": new_retry_count
+                },
+                "created_at": now_str
+            }
+            try:
+                supabase.table("audit_logs").insert(audit_payload).execute()
+            except Exception:
+                pass
+
+            return {
+                "success": True,
+                "action_id": action_id,
+                "status": "EXECUTED_SUCCESS",
+                "retry_count": new_retry_count,
+                "gateway_transaction_id": adapter_res.transaction_id,
+                "message": "Action replayed successfully."
+            }
+        else:
+            update_data = {
+                "status": "EXECUTED_FAILED",
+                "is_dlq": True,
+                "retry_count": new_retry_count,
+                "last_error": adapter_res.error_message or "Gateway execution failed",
+                "success": False,
+                "executed_at": now_str
+            }
+            supabase.table("recovery_actions").update(update_data).eq("id", action_id).execute()
+
+            # Insert Audit Log
+            audit_payload = {
+                "merchant_id": user.merchant_id,
+                "actor_type": "user",
+                "actor_id": user.user_id,
+                "action": "RECOVERY_ACTION_REPLAY_FAILED",
+                "action_type": "RECOVERY_ACTION_REPLAY_FAILED",
+                "entity_type": "recovery_action",
+                "entity_id": action_id,
+                "actor": req_actor,
+                "details": {
+                    "action_id": action_id,
+                    "transaction_id": tx_id,
+                    "error_code": adapter_res.error_code,
+                    "error_message": adapter_res.error_message,
+                    "retry_count": new_retry_count
+                },
+                "created_at": now_str
+            }
+            try:
+                supabase.table("audit_logs").insert(audit_payload).execute()
+            except Exception:
+                pass
+
+            return {
+                "success": False,
+                "action_id": action_id,
+                "status": "EXECUTED_FAILED",
+                "retry_count": new_retry_count,
+                "error_code": adapter_res.error_code,
+                "error_message": adapter_res.error_message,
+                "message": "Replay failed and item remains in DLQ."
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error replaying recovery action '{action_id}': {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

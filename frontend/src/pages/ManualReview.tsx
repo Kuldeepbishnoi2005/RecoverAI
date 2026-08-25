@@ -12,7 +12,10 @@ import {
   UserCheck,
   Brain,
   Zap,
-  Info
+  Info,
+  RotateCcw,
+  AlertOctagon,
+  ListFilter
 } from 'lucide-react';
 import { Card } from '../components/common/Card';
 import { Badge } from '../components/common/Badge';
@@ -20,18 +23,31 @@ import { Button } from '../components/common/Button';
 import { Modal } from '../components/common/Modal';
 import { LoadingSpinner, ErrorBanner, EmptyState } from '../components/common/Feedback';
 import { api } from '../lib/api';
-import { ManualReviewQueueItem, ManualReviewActionDetail } from '../types';
+import { ManualReviewQueueItem, ManualReviewActionDetail, DLQActionItem } from '../types';
 
 export const ManualReview: React.FC = () => {
-  const [queue, setQueue] = useState<ManualReviewQueueItem[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [activeTab, setActiveTab] = useState<'pending' | 'dlq'>('pending');
+
+  // Queue state for pending approvals
+  const [pendingQueue, setPendingQueue] = useState<ManualReviewQueueItem[]>([]);
+  const [loadingPending, setLoadingPending] = useState<boolean>(true);
+
+  // DLQ state
+  const [dlqItems, setDlqItems] = useState<DLQActionItem[]>([]);
+  const [loadingDlq, setLoadingDlq] = useState<boolean>(true);
+
   const [error, setError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
-  // Selected action for detailed inspection / modal
+  // Selected action for detailed inspection / modal (Pending Approval)
   const [selectedQueueItem, setSelectedQueueItem] = useState<ManualReviewQueueItem | null>(null);
   const [detailedAction, setDetailedAction] = useState<ManualReviewActionDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState<boolean>(false);
+
+  // Replay modal state (DLQ)
+  const [selectedDlqItem, setSelectedDlqItem] = useState<DLQActionItem | null>(null);
+  const [replayNotes, setReplayNotes] = useState<string>('');
+  const [replaying, setReplaying] = useState<boolean>(false);
 
   // Approval/Rejection input state
   const [merchantNotes, setMerchantNotes] = useState<string>('');
@@ -39,22 +55,44 @@ export const ManualReview: React.FC = () => {
   const [submittingAction, setSubmittingAction] = useState<boolean>(false);
   const [showRejectForm, setShowRejectForm] = useState<boolean>(false);
 
-  const fetchQueue = async () => {
-    setLoading(true);
-    setError(null);
+  const fetchPendingQueue = async () => {
+    setLoadingPending(true);
     try {
       const data = await api.manualReview.getQueue();
-      setQueue(data);
+      setPendingQueue(data);
     } catch (err: any) {
       console.error('Failed to fetch manual review queue:', err);
       setError(err.message || 'Failed to load manual review queue from backend.');
     } finally {
-      setLoading(false);
+      setLoadingPending(false);
+    }
+  };
+
+  const fetchDlqItems = async () => {
+    setLoadingDlq(true);
+    try {
+      const data = await api.getDLQActions();
+      setDlqItems(data.items || []);
+    } catch (err: any) {
+      console.error('Failed to fetch DLQ items:', err);
+      setError(err.message || 'Failed to load Dead-Letter Queue items.');
+    } finally {
+      setLoadingDlq(false);
+    }
+  };
+
+  const refreshAll = async () => {
+    setError(null);
+    if (activeTab === 'pending') {
+      await fetchPendingQueue();
+    } else {
+      await fetchDlqItems();
     }
   };
 
   useEffect(() => {
-    fetchQueue();
+    fetchPendingQueue();
+    fetchDlqItems();
   }, []);
 
   const openInspectModal = async (item: ManualReviewQueueItem) => {
@@ -68,7 +106,6 @@ export const ManualReview: React.FC = () => {
       setDetailedAction(detail);
     } catch (err: any) {
       console.error('Failed to fetch action details:', err);
-      // Fallback to item if full endpoint fails
       setDetailedAction(null);
     } finally {
       setLoadingDetail(false);
@@ -103,7 +140,7 @@ export const ManualReview: React.FC = () => {
         `Action ${selectedQueueItem.id} approved successfully! Simulation result: ${res.simulation_result?.status || res.action?.status}`
       );
       closeModal();
-      await fetchQueue();
+      await fetchPendingQueue();
     } catch (err: any) {
       console.error('Approval failed:', err);
       setError(err.message || 'Failed to approve recovery action.');
@@ -129,7 +166,7 @@ export const ManualReview: React.FC = () => {
 
       setActionSuccess(`Action ${selectedQueueItem.id} rejected. Status: ${res.action?.status}`);
       closeModal();
-      await fetchQueue();
+      await fetchPendingQueue();
     } catch (err: any) {
       console.error('Rejection failed:', err);
       setError(err.message || 'Failed to reject recovery action.');
@@ -138,9 +175,35 @@ export const ManualReview: React.FC = () => {
     }
   };
 
+  const handleReplayAction = async () => {
+    if (!selectedDlqItem) return;
+    setReplaying(true);
+    setError(null);
+    try {
+      const res = await api.replayAction(selectedDlqItem.id, replayNotes);
+      setActionSuccess(
+        `DLQ Action ${selectedDlqItem.id} replayed via ${res.replay_details?.gateway_provider || 'gateway'}! Result status: ${res.action?.status || 'EXECUTED'}`
+      );
+      setSelectedDlqItem(null);
+      setReplayNotes('');
+      await fetchDlqItems();
+      await fetchPendingQueue();
+    } catch (err: any) {
+      console.error('Replay failed:', err);
+      setError(err.message || 'Failed to replay failed recovery action.');
+    } finally {
+      setReplaying(false);
+    }
+  };
+
   // Metrics computation
-  const pendingItems = queue.filter(q => q.status === 'pending_approval');
-  const totalPendingAmount = pendingItems.reduce((acc, curr) => acc + (curr.amount || 0), 0);
+  const pendingCount = pendingQueue.filter(q => q.status === 'pending_approval').length;
+  const totalPendingAmount = pendingQueue
+    .filter(q => q.status === 'pending_approval')
+    .reduce((acc, curr) => acc + (curr.amount || 0), 0);
+
+  const dlqCount = dlqItems.length;
+  const totalDlqAmount = dlqItems.reduce((acc, curr) => acc + (curr.amount || 0), 0);
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -149,27 +212,54 @@ export const ManualReview: React.FC = () => {
         <div>
           <div className="flex items-center gap-2">
             <Badge variant="warning" className="px-2 py-0.5 text-xs font-semibold">
-              Human-In-The-Loop Governance
+              Human-In-The-Loop Governance & Operational Resilience
             </Badge>
-            <span className="text-xs text-fintech-blueGray">Phase 5 Recovery Execution</span>
+            <span className="text-xs text-fintech-blueGray">Phase 8A Gateway Framework</span>
           </div>
           <h1 className="text-2xl font-display font-bold text-fintech-textPrimary tracking-tight mt-1">
-            Manual Review & Approval Queue
+            Manual Review & Dead-Letter Queue (DLQ)
           </h1>
           <p className="text-xs text-fintech-textMuted mt-1">
-            Authorize or reject high-risk recovery interventions flagged by the RecoverAI Policy Controller before execution.
+            Authorize high-risk recovery interventions and manually replay failed executions with gateway resilience.
           </p>
         </div>
         <Button
           variant="outline"
           size="sm"
-          onClick={fetchQueue}
-          disabled={loading}
+          onClick={refreshAll}
+          disabled={loadingPending || loadingDlq}
           className="gap-1.5 text-xs self-start sm:self-auto"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          Refresh Queue
+          <RefreshCw className={`w-3.5 h-3.5 ${(loadingPending || loadingDlq) ? 'animate-spin' : ''}`} />
+          Refresh Workspace
         </Button>
+      </div>
+
+      {/* Tabs bar */}
+      <div className="flex items-center gap-2 border-b border-fintech-border pb-1">
+        <button
+          onClick={() => setActiveTab('pending')}
+          className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-t-elem transition-colors border-b-2 ${
+            activeTab === 'pending'
+              ? 'border-brand-primary text-brand-primary bg-brand-primary/5'
+              : 'border-transparent text-fintech-textMuted hover:text-fintech-textPrimary'
+          }`}
+        >
+          <UserCheck className="w-4 h-4" />
+          <span>Pending Approvals ({pendingCount})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('dlq')}
+          className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-t-elem transition-colors border-b-2 ${
+            activeTab === 'dlq'
+              ? 'border-amber-500 text-amber-600 bg-amber-500/10'
+              : 'border-transparent text-fintech-textMuted hover:text-fintech-textPrimary'
+          }`}
+        >
+          <AlertOctagon className="w-4 h-4" />
+          <span>Dead-Letter Queue (DLQ) ({dlqCount})</span>
+        </button>
       </div>
 
       {/* Success Notification Banner */}
@@ -188,159 +278,348 @@ export const ManualReview: React.FC = () => {
         </div>
       )}
 
-      {/* Hero / Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
-        <Card className="bg-surface-card border-fintech-border shadow-2xs">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-fintech-textMuted uppercase tracking-wider">Pending Review</span>
-            <UserCheck className="w-4 h-4 text-brand-secondary" />
-          </div>
-          <div className="text-2xl font-display font-bold text-fintech-textPrimary">
-            {pendingItems.length}
-          </div>
-          <p className="text-[11px] text-fintech-blueGray mt-1">Actions awaiting approval</p>
-        </Card>
+      {error && <ErrorBanner message={error} onRetry={refreshAll} />}
 
-        <Card className="bg-surface-card border-fintech-border shadow-2xs">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-fintech-textMuted uppercase tracking-wider">Total Value at Risk</span>
-            <DollarSign className="w-4 h-4 text-status-success" />
-          </div>
-          <div className="text-2xl font-display font-bold text-brand-primary">
-            ${totalPendingAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          </div>
-          <p className="text-[11px] text-fintech-blueGray mt-1">Pending recovery revenue</p>
-        </Card>
+      {/* TAB 1: PENDING APPROVAL QUEUE */}
+      {activeTab === 'pending' && (
+        <div className="space-y-6">
+          {/* Metrics */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+            <Card className="bg-surface-card border-fintech-border shadow-2xs">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-fintech-textMuted uppercase tracking-wider">Pending Review</span>
+                <UserCheck className="w-4 h-4 text-brand-secondary" />
+              </div>
+              <div className="text-2xl font-display font-bold text-fintech-textPrimary">
+                {pendingCount}
+              </div>
+              <p className="text-[11px] text-fintech-blueGray mt-1">Actions awaiting manual decision</p>
+            </Card>
 
-        <Card className="bg-surface-card border-fintech-border shadow-2xs">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-fintech-textMuted uppercase tracking-wider">Policy Threshold</span>
-            <Lock className="w-4 h-4 text-status-warning" />
-          </div>
-          <div className="text-lg font-display font-bold text-fintech-textPrimary font-mono">
-            Max $50,000 / 3 Retries
-          </div>
-          <p className="text-[11px] text-fintech-blueGray mt-1">Strict governance guardrails</p>
-        </Card>
+            <Card className="bg-surface-card border-fintech-border shadow-2xs">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-fintech-textMuted uppercase tracking-wider">Total Value at Risk</span>
+                <DollarSign className="w-4 h-4 text-status-success" />
+              </div>
+              <div className="text-2xl font-display font-bold text-brand-primary">
+                ${totalPendingAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <p className="text-[11px] text-fintech-blueGray mt-1">Pending recovery revenue</p>
+            </Card>
 
-        <Card className="bg-brand-primary/5 border-brand-primary/20 shadow-2xs">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-brand-primary uppercase tracking-wider">Execution Mode</span>
-            <Zap className="w-4 h-4 text-brand-primary" />
-          </div>
-          <div className="text-base font-bold text-brand-primary font-mono">
-            Simulator-Only Mode
-          </div>
-          <p className="text-[11px] text-fintech-textMuted mt-1">Zero real payment gateway mutation</p>
-        </Card>
-      </div>
+            <Card className="bg-surface-card border-fintech-border shadow-2xs">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-fintech-textMuted uppercase tracking-wider">Policy Guardrails</span>
+                <Lock className="w-4 h-4 text-status-warning" />
+              </div>
+              <div className="text-base font-display font-bold text-fintech-textPrimary font-mono">
+                Threshold: Dynamic AI
+              </div>
+              <p className="text-[11px] text-fintech-blueGray mt-1">Configured in Merchant Settings</p>
+            </Card>
 
-      {error && <ErrorBanner message={error} onRetry={fetchQueue} />}
-
-      {/* Queue Table Card */}
-      {loading ? (
-        <Card padding="lg">
-          <LoadingSpinner label="Loading pending recovery queue items..." />
-        </Card>
-      ) : queue.length === 0 ? (
-        <Card padding="lg">
-          <EmptyState
-            title="Manual Review Queue Empty"
-            description="All flagged recovery actions have been reviewed or processed. No pending interventions require approval."
-            onAction={fetchQueue}
-            actionLabel="Refresh Queue"
-          />
-        </Card>
-      ) : (
-        <Card padding="none">
-          <div className="p-6 border-b border-fintech-border flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-semibold text-fintech-textPrimary">Pending Approval Items</h3>
-              <p className="text-xs text-fintech-textMuted mt-0.5">
-                Review policy reasoning and decision confidence before confirming automated simulation.
-              </p>
-            </div>
-            <span className="text-xs font-mono text-fintech-blueGray">
-              {queue.length} Total Record{queue.length === 1 ? '' : 's'}
-            </span>
+            <Card className="bg-brand-primary/5 border-brand-primary/20 shadow-2xs">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-brand-primary uppercase tracking-wider">Gateway Provider</span>
+                <Zap className="w-4 h-4 text-brand-primary" />
+              </div>
+              <div className="text-base font-bold text-brand-primary font-mono">
+                Sandbox Simulator
+              </div>
+              <p className="text-[11px] text-fintech-textMuted mt-1">Safe execution adapter</p>
+            </Card>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-fintech-textPrimary">
-              <thead className="bg-surface-muted border-b border-fintech-border font-semibold text-fintech-blueGray uppercase text-[10px] tracking-wider">
-                <tr>
-                  <th className="px-6 py-3">Action ID</th>
-                  <th className="px-6 py-3">Strategy / Action</th>
-                  <th className="px-6 py-3">Amount</th>
-                  <th className="px-6 py-3">Policy Trigger Rationale</th>
-                  <th className="px-6 py-3">Status</th>
-                  <th className="px-6 py-3">Created</th>
-                  <th className="px-6 py-3 text-right">Governance Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-fintech-border">
-                {queue.map((item) => (
-                  <tr key={item.id} className="hover:bg-surface-muted/50 transition-colors">
-                    <td className="px-6 py-4 font-mono font-bold text-brand-primary">
-                      {item.id.slice(0, 8)}...
-                    </td>
-                    <td className="px-6 py-4 capitalize">
-                      <div className="font-semibold text-fintech-textPrimary">
-                        {(item.action_type || item.strategy || 'recovery_action').replace(/_/g, ' ')}
-                      </div>
-                      {item.execution_strategy && (
-                        <div className="text-[11px] text-fintech-textMuted font-mono mt-0.5">
-                          Strategy: {item.execution_strategy}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 font-bold text-fintech-textPrimary font-mono">
-                      ${(item.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {item.currency}
-                    </td>
-                    <td className="px-6 py-4 max-w-xs text-fintech-textMuted">
-                      <div className="line-clamp-2 text-[11px] leading-relaxed">
-                        {item.policy_check_results?.reason || item.reason || 'Flagged for merchant oversight'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <Badge
-                        variant={
-                          item.status === 'pending_approval'
-                            ? 'warning'
-                            : item.status === 'approved'
-                            ? 'success'
-                            : item.status === 'rejected'
-                            ? 'danger'
-                            : 'neutral'
-                        }
-                        className="capitalize text-[10px]"
-                      >
-                        {(item.status || 'pending_approval').replace(/_/g, ' ')}
-                      </Badge>
-                    </td>
-                    <td className="px-6 py-4 text-fintech-textMuted font-mono text-[11px]">
-                      {new Date(item.created_at).toLocaleString()}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={() => openInspectModal(item)}
-                        className="gap-1 text-xs"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Inspect & Review</span>
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+          {/* Pending Queue Table */}
+          {loadingPending ? (
+            <Card padding="lg">
+              <LoadingSpinner label="Loading pending recovery queue items..." />
+            </Card>
+          ) : pendingQueue.length === 0 ? (
+            <Card padding="lg">
+              <EmptyState
+                title="Manual Review Queue Empty"
+                description="All flagged recovery actions have been reviewed or processed. No pending interventions require approval."
+                onAction={fetchPendingQueue}
+                actionLabel="Refresh Queue"
+              />
+            </Card>
+          ) : (
+            <Card padding="none">
+              <div className="p-6 border-b border-fintech-border flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-semibold text-fintech-textPrimary">Pending Approval Items</h3>
+                  <p className="text-xs text-fintech-textMuted mt-0.5">
+                    Review policy reasoning and decision confidence before confirming automated simulation.
+                  </p>
+                </div>
+                <span className="text-xs font-mono text-fintech-blueGray">
+                  {pendingQueue.length} Record{pendingQueue.length === 1 ? '' : 's'}
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-fintech-textPrimary">
+                  <thead className="bg-surface-muted border-b border-fintech-border font-semibold text-fintech-blueGray uppercase text-[10px] tracking-wider">
+                    <tr>
+                      <th className="px-6 py-3">Action ID</th>
+                      <th className="px-6 py-3">Strategy / Action</th>
+                      <th className="px-6 py-3">Amount</th>
+                      <th className="px-6 py-3">Policy Trigger Rationale</th>
+                      <th className="px-6 py-3">Status</th>
+                      <th className="px-6 py-3">Created</th>
+                      <th className="px-6 py-3 text-right">Governance Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-fintech-border">
+                    {pendingQueue.map((item) => (
+                      <tr key={item.id} className="hover:bg-surface-muted/50 transition-colors">
+                        <td className="px-6 py-4 font-mono font-bold text-brand-primary">
+                          {item.id.slice(0, 8)}...
+                        </td>
+                        <td className="px-6 py-4 capitalize">
+                          <div className="font-semibold text-fintech-textPrimary">
+                            {(item.action_type || item.strategy || 'recovery_action').replace(/_/g, ' ')}
+                          </div>
+                          {item.execution_strategy && (
+                            <div className="text-[11px] text-fintech-textMuted font-mono mt-0.5">
+                              Strategy: {item.execution_strategy}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 font-bold text-fintech-textPrimary font-mono">
+                          ${(item.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {item.currency}
+                        </td>
+                        <td className="px-6 py-4 max-w-xs text-fintech-textMuted">
+                          <div className="line-clamp-2 text-[11px] leading-relaxed">
+                            {item.policy_check_results?.reason || item.reason || 'Flagged for merchant oversight'}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <Badge
+                            variant={
+                              item.status === 'pending_approval'
+                                ? 'warning'
+                                : item.status === 'approved'
+                                ? 'success'
+                                : item.status === 'rejected'
+                                ? 'danger'
+                                : 'neutral'
+                            }
+                            className="capitalize text-[10px]"
+                          >
+                            {(item.status || 'pending_approval').replace(/_/g, ' ')}
+                          </Badge>
+                        </td>
+                        <td className="px-6 py-4 text-fintech-textMuted font-mono text-[11px]">
+                          {new Date(item.created_at).toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => openInspectModal(item)}
+                            className="gap-1 text-xs"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Inspect & Review</span>
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </div>
       )}
 
-      {/* Detailed Action Modal */}
+      {/* TAB 2: DEAD-LETTER QUEUE (DLQ) & REPLAY */}
+      {activeTab === 'dlq' && (
+        <div className="space-y-6">
+          {/* DLQ Metrics */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <Card className="bg-amber-500/5 border-amber-500/20 shadow-2xs">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-amber-700 dark:text-amber-400 uppercase tracking-wider">Failed Executions (DLQ)</span>
+                <AlertOctagon className="w-4 h-4 text-amber-600" />
+              </div>
+              <div className="text-2xl font-display font-bold text-amber-700 dark:text-amber-300">
+                {dlqCount}
+              </div>
+              <p className="text-[11px] text-fintech-textMuted mt-1">Actions flagged for manual replay</p>
+            </Card>
+
+            <Card className="bg-surface-card border-fintech-border shadow-2xs">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-fintech-textMuted uppercase tracking-wider">DLQ Value at Risk</span>
+                <DollarSign className="w-4 h-4 text-amber-600" />
+              </div>
+              <div className="text-2xl font-display font-bold text-fintech-textPrimary font-mono">
+                ${totalDlqAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <p className="text-[11px] text-fintech-blueGray mt-1">Unresolved recovery attempts</p>
+            </Card>
+
+            <Card className="bg-surface-card border-fintech-border shadow-2xs">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-fintech-textMuted uppercase tracking-wider">Replay Policy</span>
+                <RotateCcw className="w-4 h-4 text-brand-primary" />
+              </div>
+              <div className="text-base font-display font-bold text-fintech-textPrimary font-mono">
+                Manual Trigger Only
+              </div>
+              <p className="text-[11px] text-fintech-blueGray mt-1">Persistent error tracking</p>
+            </Card>
+          </div>
+
+          {/* DLQ Table */}
+          {loadingDlq ? (
+            <Card padding="lg">
+              <LoadingSpinner label="Loading Dead-Letter Queue items..." />
+            </Card>
+          ) : dlqItems.length === 0 ? (
+            <Card padding="lg">
+              <EmptyState
+                title="Dead-Letter Queue Clean"
+                description="No failed recovery actions or unhandled gateway errors detected. All recovery workflows are operating normally."
+                onAction={fetchDlqItems}
+                actionLabel="Check DLQ"
+              />
+            </Card>
+          ) : (
+            <Card padding="none">
+              <div className="p-6 border-b border-fintech-border flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-semibold text-fintech-textPrimary">Dead-Letter Queue (DLQ) Items</h3>
+                  <p className="text-xs text-fintech-textMuted mt-0.5">
+                    Actions that failed during initial gateway dispatch or hit maximum automated retries.
+                  </p>
+                </div>
+                <span className="text-xs font-mono text-amber-600 font-bold">
+                  {dlqItems.length} Failed Item{dlqItems.length === 1 ? '' : 's'}
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-fintech-textPrimary">
+                  <thead className="bg-surface-muted border-b border-fintech-border font-semibold text-fintech-blueGray uppercase text-[10px] tracking-wider">
+                    <tr>
+                      <th className="px-6 py-3">Action ID</th>
+                      <th className="px-6 py-3">Strategy / Type</th>
+                      <th className="px-6 py-3">Amount</th>
+                      <th className="px-6 py-3">Last Gateway Error</th>
+                      <th className="px-6 py-3">Retries</th>
+                      <th className="px-6 py-3">Status</th>
+                      <th className="px-6 py-3 text-right">Replay Intervention</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-fintech-border">
+                    {dlqItems.map((item) => (
+                      <tr key={item.id} className="hover:bg-amber-500/5 transition-colors">
+                        <td className="px-6 py-4 font-mono font-bold text-amber-600">
+                          {item.id.slice(0, 8)}...
+                        </td>
+                        <td className="px-6 py-4 capitalize font-semibold">
+                          {(item.action_type || item.strategy || 'recovery_action').replace(/_/g, ' ')}
+                        </td>
+                        <td className="px-6 py-4 font-bold font-mono text-fintech-textPrimary">
+                          ${(item.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} {item.currency}
+                        </td>
+                        <td className="px-6 py-4 max-w-xs text-red-600 font-mono text-[11px]">
+                          <div className="line-clamp-2">
+                            {item.last_error || item.reason || 'Execution failure / Max retries reached'}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 font-mono font-bold text-fintech-textMuted">
+                          {item.retry_count || 0}
+                        </td>
+                        <td className="px-6 py-4">
+                          <Badge variant="danger" className="text-[10px] uppercase">
+                            {item.status || 'EXECUTED_FAILED'}
+                          </Badge>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSelectedDlqItem(item)}
+                            className="gap-1.5 text-xs text-amber-600 border-amber-500/30 hover:bg-amber-500/10"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Replay Action</span>
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* DLQ Replay Confirmation Modal */}
+      {selectedDlqItem && (
+        <Modal
+          isOpen={!!selectedDlqItem}
+          onClose={() => setSelectedDlqItem(null)}
+          title={`Replay Failed Action: ${selectedDlqItem.id}`}
+          subtitle={`Strategy: ${selectedDlqItem.action_type || selectedDlqItem.strategy} | Amount: $${selectedDlqItem.amount}`}
+          maxWidth="md"
+          footer={
+            <div className="flex items-center justify-between w-full">
+              <Button variant="outline" size="sm" onClick={() => setSelectedDlqItem(null)} disabled={replaying}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleReplayAction}
+                isLoading={replaying}
+                className="gap-1.5 bg-amber-600 hover:bg-amber-700 text-white border-none"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Execute Gateway Replay</span>
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-4 text-xs text-fintech-textPrimary">
+            <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-elem space-y-1">
+              <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-bold">
+                <AlertOctagon className="w-4 h-4" />
+                <span>Gateway Adapter Re-Execution</span>
+              </div>
+              <p className="text-fintech-textMuted">
+                This will trigger the active Gateway Adapter (Sandbox Simulator) to re-process this recovery action and log audit events.
+              </p>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-fintech-textMuted mb-1">Previous Error Context</label>
+              <div className="p-3 bg-surface-muted font-mono text-[11px] text-red-600 rounded-elem border border-fintech-border">
+                {selectedDlqItem.last_error || 'Execution failure / Max retries reached'}
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-fintech-textPrimary mb-1">Replay Audit Notes (Optional)</label>
+              <input
+                type="text"
+                placeholder="Reason for manual replay, e.g. Customer card updated."
+                value={replayNotes}
+                onChange={(e) => setReplayNotes(e.target.value)}
+                className="w-full px-3 py-2 rounded-elem border border-fintech-border text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Detailed Action Modal for Pending Approvals */}
       {selectedQueueItem && (
         <Modal
           isOpen={!!selectedQueueItem}
@@ -401,7 +680,6 @@ export const ManualReview: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-5 text-xs text-fintech-textPrimary">
-              {/* Summary Banner inside modal */}
               <div className="p-4 rounded-elem bg-surface-muted border border-fintech-border flex items-center justify-between">
                 <div>
                   <span className="text-[11px] text-fintech-blueGray uppercase tracking-wider block">Recovery Amount</span>
@@ -414,14 +692,13 @@ export const ManualReview: React.FC = () => {
                 </Badge>
               </div>
 
-              {/* Related Transaction Context */}
               {detailedAction?.transaction ? (
                 <div>
                   <h4 className="text-xs font-semibold text-fintech-textPrimary mb-2 flex items-center gap-1.5">
                     <Info className="w-3.5 h-3.5 text-brand-primary" />
                     Transaction & Customer Context
                   </h4>
-                  <div className="grid grid-cols-2 gap-3 p-3 bg-white rounded-elem border border-fintech-border font-mono text-[11px]">
+                  <div className="grid grid-cols-2 gap-3 p-3 bg-white dark:bg-slate-900 rounded-elem border border-fintech-border font-mono text-[11px]">
                     <div>
                       <span className="text-fintech-blueGray">Transaction ID:</span> {detailedAction.transaction.id}
                     </div>
@@ -443,7 +720,6 @@ export const ManualReview: React.FC = () => {
                 </div>
               ) : null}
 
-              {/* Policy Check & Rationale */}
               <div>
                 <h4 className="text-xs font-semibold text-fintech-textPrimary mb-2 flex items-center gap-1.5">
                   <ShieldCheck className="w-3.5 h-3.5 text-status-warning" />
@@ -454,7 +730,6 @@ export const ManualReview: React.FC = () => {
                 </div>
               </div>
 
-              {/* AI Decision & Confidence */}
               {detailedAction?.ai_decision && (
                 <div>
                   <h4 className="text-xs font-semibold text-fintech-textPrimary mb-2 flex items-center gap-1.5">
@@ -475,7 +750,6 @@ export const ManualReview: React.FC = () => {
                 </div>
               )}
 
-              {/* Approver Notes / Rejection Form */}
               {selectedQueueItem.status === 'pending_approval' && (
                 <div className="pt-3 border-t border-fintech-border space-y-3">
                   {!showRejectForm ? (

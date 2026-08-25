@@ -181,6 +181,32 @@ def run_recovery_pipeline(
     merchant_id = str(transaction.get("merchant_id", "merchant_001"))
     tx_id = str(transaction.get("transaction_id", ""))
 
+    # If merchant_policy not provided, load dynamic merchant settings from DB
+    if merchant_policy is None:
+        try:
+            supabase = get_supabase_admin_client()
+            raw_m_id = merchant_id
+            try:
+                m_uuid = str(uuid.UUID(raw_m_id))
+            except ValueError:
+                m_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, raw_m_id))
+
+            res = supabase.table("merchant_settings").select("*").eq("merchant_id", m_uuid).execute()
+            if res.data:
+                row = res.data[0]
+                merchant_policy = MerchantPolicy(
+                    merchant_id=merchant_id,
+                    minimum_ai_confidence=float(row.get("min_ai_confidence_threshold", 0.70)),
+                    maximum_retry_attempts=int(row.get("max_retry_attempts", 3)),
+                    maximum_recovery_amount=float(row.get("max_recovery_amount_limit", 50000.0)),
+                    allowed_recovery_strategies=row.get("allowed_strategies") or [
+                        "SMART_RETRY", "PAYMENT_METHOD_UPDATE", "PERSONALIZED_DUNNING", "CHECKOUT_REMINDER", "MANUAL_REVIEW", "NO_ACTION"
+                    ],
+                    automatic_recovery_enabled=bool(row.get("autonomous_mode", True))
+                )
+        except Exception as e:
+            logger.warning(f"Could not load dynamic merchant settings from DB: {e}")
+
     # Step 1: Build Context (Strictly observable data, no ground truth)
     context = build_ai_context(transaction, merchant_policy)
 

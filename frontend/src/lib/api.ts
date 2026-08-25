@@ -264,5 +264,63 @@ export const api = {
       }
       return res.json();
     }
+  },
+
+  async getMerchantSettings(): Promise<any> {
+    return fetchJson<any>('/api/v1/merchant-settings');
+  },
+
+  async updateMerchantSettings(payload: { autonomous_mode?: boolean; min_ai_confidence_threshold?: number; default_gateway?: string }): Promise<any> {
+    const authHeader = await getAuthHeader();
+    const res = await fetch(`${API_BASE}/api/v1/merchant-settings`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeader
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.detail || `Update Settings Error ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  },
+
+  async rotateWebhookSecret(): Promise<{ success: boolean; new_webhook_secret: string; message: string }> {
+    const authHeader = await getAuthHeader();
+    const res = await fetch(`${API_BASE}/api/v1/merchant-settings/rotate-webhook-secret`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeader
+      }
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.detail || `Rotate Secret Error ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  },
+
+  async getDLQActions(): Promise<{ items: any[]; total: number }> {
+    return fetchJson<{ items: any[]; total: number }>('/api/v1/manual-review/dlq');
+  },
+
+  async replayAction(actionId: string, notes?: string): Promise<any> {
+    const authHeader = await getAuthHeader();
+    const res = await fetch(`${API_BASE}/api/v1/manual-review/${actionId}/replay`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeader
+      },
+      body: JSON.stringify({ actor: 'merchant_admin', notes: notes || 'Manual action replay initiated' })
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.detail || `Replay Error ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
   }
 };

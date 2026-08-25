@@ -80,7 +80,21 @@ def resolve_webhook_merchant(raw_body: bytes, sig_header: str) -> Optional[str]:
     if not sig_header:
         return None
 
-    # 1. Production Mode: Check merchant-specific webhook secrets stored in database
+    # 1. Production Mode: Check merchant-specific webhook secrets stored in merchant_settings table
+    try:
+        supabase = get_supabase_admin_client()
+        ms_res = supabase.table("merchant_settings").select("merchant_id, webhook_secret").execute()
+        if ms_res and ms_res.data:
+            for ms in ms_res.data:
+                m_secret = ms.get("webhook_secret")
+                m_id = ms.get("merchant_id")
+                if m_secret and m_id and verify_webhook_signature(raw_body, sig_header, m_secret):
+                    logger.info(f"Resolved merchant '{m_id}' cryptographically via merchant_settings webhook secret.")
+                    return str(m_id)
+    except Exception as e:
+        logger.warning(f"Error resolving merchant from merchant_settings database: {e}")
+
+    # Fallback to legacy merchants table settings
     try:
         supabase = get_supabase_admin_client()
         merchants_res = supabase.table("merchants").select("id, settings").execute()
@@ -90,7 +104,7 @@ def resolve_webhook_merchant(raw_body: bytes, sig_header: str) -> Optional[str]:
                 m_secret = m_settings.get("webhook_secret")
                 if m_secret and verify_webhook_signature(raw_body, sig_header, m_secret):
                     m_id = str(m["id"])
-                    logger.info(f"Resolved merchant '{m_id}' cryptographically via merchant-specific webhook secret.")
+                    logger.info(f"Resolved merchant '{m_id}' cryptographically via legacy merchants webhook secret.")
                     return m_id
     except Exception as e:
         logger.warning(f"Error resolving merchant from database webhook secrets: {e}")
@@ -101,6 +115,53 @@ def resolve_webhook_merchant(raw_body: bytes, sig_header: str) -> Optional[str]:
         return getattr(settings, "DEFAULT_MERCHANT_ID", "merchant_001")
 
     return None
+
+
+def _log_webhook_delivery(
+    merchant_id: Optional[str],
+    event_id: str,
+    event_type: str,
+    signature_verified: bool,
+    status_code: int,
+    payload: Optional[dict] = None,
+    error_message: Optional[str] = None
+):
+    """Persists webhook delivery result to webhook_deliveries table."""
+    if not merchant_id:
+        return
+    try:
+        supabase = get_supabase_admin_client()
+        m_uuid = _to_uuid_str(merchant_id)
+        # Ensure merchant exists before FK insert
+        m_check = supabase.table("merchants").select("id").eq("id", m_uuid).execute()
+        if not m_check.data:
+            existing_m = supabase.table("merchants").select("id").limit(1).execute()
+            if existing_m.data:
+                m_uuid = str(existing_m.data[0]["id"])
+            else:
+                return
+
+        # Sanitize payload to strip Authorization or secret headers if present
+        clean_payload = dict(payload) if payload else {}
+        if "headers" in clean_payload:
+            headers = dict(clean_payload["headers"])
+            headers.pop("authorization", None)
+            headers.pop("Authorization", None)
+            headers.pop("x-webhook-signature", None)
+            clean_payload["headers"] = headers
+
+        supabase.table("webhook_deliveries").insert({
+            "merchant_id": m_uuid,
+            "event_id": event_id,
+            "event_type": event_type,
+            "signature_verified": signature_verified,
+            "status_code": status_code,
+            "payload": clean_payload,
+            "error_message": error_message,
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
+    except Exception as e:
+        logger.warning(f"Failed to record webhook delivery log: {e}")
 
 
 @router.post("/ingest", response_model=WebhookIngestResponse)
@@ -151,6 +212,14 @@ async def ingest_webhook_event(
 
     # Step 3: Reject Unsigned / Unauthenticated Requests
     if not verified_merchant_id:
+        _log_webhook_delivery(
+            merchant_id=None,
+            event_id="unknown_unauthorized",
+            event_type="unknown",
+            signature_verified=False,
+            status_code=401,
+            error_message="Unauthorized ingestion request. Invalid or missing signature."
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized ingestion request. Valid webhook signature or authorization token required."
@@ -301,6 +370,16 @@ async def ingest_webhook_event(
         "pipeline_run_id": pipeline_run_id
     }
 
+    _log_webhook_delivery(
+        merchant_id=verified_merchant_id,
+        event_id=event_id,
+        event_type=str(payload.get("event_type") or payload.get("type") or "payment_intent.payment_failed"),
+        signature_verified=(auth_method == "WEBHOOK_SIGNATURE"),
+        status_code=200,
+        payload=payload,
+        error_message=None
+    )
+
     return WebhookIngestResponse(
         status="processed",
         idempotency_key=event_id,
@@ -311,4 +390,3 @@ async def ingest_webhook_event(
         pipeline_run_id=pipeline_run_id,
         message="Event successfully ingested and processed"
     )
-

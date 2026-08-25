@@ -19,23 +19,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    // 1. Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    }).catch(() => {
-      setLoading(false);
+    let isMounted = true;
+
+    // Guaranteed resolution timer to prevent infinite loading state
+    const timer = setTimeout(() => {
+      if (isMounted) {
+        setLoading(false);
+      }
+    }, 2000);
+
+    // 1. Listen for auth changes (fires INITIAL_SESSION in Supabase v2)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, currentSession) => {
+      if (isMounted) {
+        setSession(currentSession);
+        setUser(currentSession?.user ?? null);
+        setLoading(false);
+        clearTimeout(timer);
+      }
     });
 
-    // 2. Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
+    // 2. Fetch initial session explicitly as fallback
+    supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
+      if (isMounted) {
+        setSession(currentSession);
+        setUser(currentSession?.user ?? null);
+        setLoading(false);
+        clearTimeout(timer);
+      }
+    }).catch(() => {
+      if (isMounted) {
+        setLoading(false);
+        clearTimeout(timer);
+      }
     });
 
     return () => {
+      isMounted = false;
+      clearTimeout(timer);
       subscription.unsubscribe();
     };
   }, []);
@@ -45,6 +65,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       email,
       password: pass
     });
+    if (res.data?.session) {
+      setSession(res.data.session);
+      setUser(res.data.session.user ?? null);
+    }
     return res;
   };
 
@@ -55,8 +79,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const getToken = async (): Promise<string | null> => {
-    const { data: { session } } = await supabase.auth.getSession();
-    return session?.access_token || null;
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    return currentSession?.access_token || session?.access_token || null;
   };
 
   return (

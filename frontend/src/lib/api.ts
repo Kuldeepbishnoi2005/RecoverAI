@@ -9,13 +9,35 @@ import {
   ApproveRequestPayload,
   RejectRequestPayload
 } from '../types';
+import { supabase } from './supabase';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-async function fetchJson<T>(endpoint: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${endpoint}`);
+async function getAuthHeader(): Promise<Record<string, string>> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      return { 'Authorization': `Bearer ${session.access_token}` };
+    }
+  } catch (e) {
+    console.warn('Failed to retrieve Supabase auth session token:', e);
+  }
+  return {};
+}
+
+async function fetchJson<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const authHeader = await getAuthHeader();
+  const headers = {
+    ...authHeader,
+    ...(options.headers || {})
+  };
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers
+  });
   if (!res.ok) {
-    throw new Error(`API Error ${res.status}: ${res.statusText}`);
+    const errText = await res.text().catch(() => '');
+    throw new Error(`API Error ${res.status}: ${res.statusText} ${errText}`);
   }
   return res.json();
 }
@@ -46,13 +68,11 @@ export const api = {
     };
   },
 
-  async getTransactions(merchantId?: string, limit?: number): Promise<Transaction[]> {
-    let query = '';
+  async getTransactions(status?: string, limit?: number): Promise<Transaction[]> {
     const params = new URLSearchParams();
-    if (merchantId) params.append('merchant_id', merchantId);
+    if (status) params.append('status', status);
     if (limit) params.append('limit', String(limit));
-    if (params.toString()) query = `?${params.toString()}`;
-
+    const query = params.toString() ? `?${params.toString()}` : '';
     const rawList = await fetchJson<any[]>(`/api/v1/transactions${query}`);
     return rawList.map((t: any) => ({
       id: String(t.id),
@@ -159,9 +179,8 @@ export const api = {
     }));
   },
 
-  async getManualReviewQueue(merchantId?: string): Promise<{ items: ManualReviewQueueItem[]; total: number }> {
-    const query = merchantId ? `?merchant_id=${merchantId}` : '';
-    return fetchJson<{ items: ManualReviewQueueItem[]; total: number }>(`/api/v1/manual-review/queue${query}`);
+  async getManualReviewQueue(): Promise<{ items: ManualReviewQueueItem[]; total: number }> {
+    return fetchJson<{ items: ManualReviewQueueItem[]; total: number }>('/api/v1/manual-review/queue');
   },
 
   async getManualReviewDetail(actionId: string): Promise<any> {
@@ -169,10 +188,12 @@ export const api = {
   },
 
   async approveManualReview(actionId: string, payload: ApproveRequestPayload): Promise<any> {
+    const authHeader = await getAuthHeader();
     const res = await fetch(`${API_BASE}/api/v1/manual-review/${actionId}/approve`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...authHeader,
         ...(payload.idempotency_key ? { 'X-Idempotency-Key': payload.idempotency_key } : {})
       },
       body: JSON.stringify(payload)
@@ -185,10 +206,12 @@ export const api = {
   },
 
   async rejectManualReview(actionId: string, payload: RejectRequestPayload): Promise<any> {
+    const authHeader = await getAuthHeader();
     const res = await fetch(`${API_BASE}/api/v1/manual-review/${actionId}/reject`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        ...authHeader
       },
       body: JSON.stringify(payload)
     });
@@ -200,9 +223,8 @@ export const api = {
   },
 
   manualReview: {
-    async getQueue(merchantId?: string): Promise<ManualReviewQueueItem[]> {
-      const query = merchantId ? `?merchant_id=${merchantId}` : '';
-      const res = await fetchJson<{ items: ManualReviewQueueItem[]; total: number }>(`/api/v1/manual-review/queue${query}`);
+    async getQueue(): Promise<ManualReviewQueueItem[]> {
+      const res = await fetchJson<{ items: ManualReviewQueueItem[]; total: number }>('/api/v1/manual-review/queue');
       return res.items || [];
     },
     async getActionDetails(actionId: string): Promise<any> {
@@ -210,10 +232,12 @@ export const api = {
     },
     async approveAction(actionId: string, payload: ApproveRequestPayload, idempotencyKey?: string): Promise<any> {
       const key = idempotencyKey || payload.idempotency_key;
+      const authHeader = await getAuthHeader();
       const res = await fetch(`${API_BASE}/api/v1/manual-review/${actionId}/approve`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...authHeader,
           ...(key ? { 'X-Idempotency-Key': key } : {})
         },
         body: JSON.stringify(payload)
@@ -225,10 +249,12 @@ export const api = {
       return res.json();
     },
     async rejectAction(actionId: string, payload: RejectRequestPayload): Promise<any> {
+      const authHeader = await getAuthHeader();
       const res = await fetch(`${API_BASE}/api/v1/manual-review/${actionId}/reject`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...authHeader
         },
         body: JSON.stringify(payload)
       });
@@ -240,4 +266,3 @@ export const api = {
     }
   }
 };
-

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+    WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "recoverai_webhook_secret_key_2026")
 
     class Config:
         case_sensitive = True

@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { useAuth } from '../../context/AuthContext';
 
 export const AppLayout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { user, signOut } = useAuth();
 
   return (
     <div className="min-h-screen bg-background flex flex-col font-sans text-fintech-textPrimary antialiased">
@@ -14,7 +16,11 @@ export const AppLayout: React.FC = () => {
       {/* Main Content Area */}
       <div className="lg:pl-64 flex flex-col min-h-screen">
         {/* Header */}
-        <Header onMenuToggle={() => setSidebarOpen(!sidebarOpen)} />
+        <Header
+          onMenuToggle={() => setSidebarOpen(!sidebarOpen)}
+          userEmail={user?.email || 'merchant@acme.com'}
+          onLogout={signOut}
+        />
 
         {/* Page Content */}
         <main className="flex-1 p-4 lg:p-8 max-w-7xl w-full mx-auto">

@@ -17,6 +17,9 @@ from tests.test_phase2_engine import (
     test_evaluator_continuous_metrics
 )
 
+from tests.test_phase3_safety import run_all_safety_tests
+from tests.test_phase7_ingestion import run_all_ingestion_tests
+
 def main():
     print("--- RUNNING PHASE 2.5 DECOUPLED ENGINE AUTOMATED TEST SUITE ---")
     tests = [
@@ -43,11 +46,26 @@ def main():
             print(f"[FAIL] {name} -> Error: {e}")
             failed += 1
 
-    print(f"\nRESULTS: {passed} PASSED, {failed} FAILED")
+    print(f"\nENGINE TEST RESULTS: {passed} PASSED, {failed} FAILED")
+
+    print("\n--- RUNNING PHASE 3 SAFETY TEST SUITE ---")
+    try:
+        run_all_safety_tests()
+    except Exception as e:
+        print(f"[FAIL] Safety tests error: {e}")
+        failed += 1
+
+    print("\n--- RUNNING PHASE 7 INGESTION TEST SUITE ---")
+    try:
+        run_all_ingestion_tests()
+    except Exception as e:
+        print(f"[FAIL] Ingestion tests error: {e}")
+        failed += 1
+
     if failed > 0:
         sys.exit(1)
     else:
-        print("ALL PHASE 2.5 TESTS PASSED SUCCESSFULLY!")
+        print("\nALL BACKEND AUTOMATED TESTS PASSED SUCCESSFULLY!")
 
 if __name__ == "__main__":
     main()

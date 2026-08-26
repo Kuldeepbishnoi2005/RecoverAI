@@ -7,7 +7,9 @@ import {
   OverviewMetrics,
   ManualReviewQueueItem,
   ApproveRequestPayload,
-  RejectRequestPayload
+  RejectRequestPayload,
+  WebhookDeliveryItem,
+  DLQSummaryResponse
 } from '../types';
 import { supabase } from './supabase';
 
@@ -326,5 +328,13 @@ export const api = {
 
   async getWebhookLogs(limit: number = 20): Promise<{ items: any[]; total: number }> {
     return fetchJson<{ items: any[]; total: number }>(`/api/v1/merchant-settings/webhook-logs?limit=${limit}`);
+  },
+
+  async getWebhookDeliveries(limit: number = 20): Promise<{ items: WebhookDeliveryItem[]; total: number }> {
+    return fetchJson<{ items: WebhookDeliveryItem[]; total: number }>(`/api/v1/webhook-deliveries?limit=${limit}`);
+  },
+
+  async getDLQSummary(): Promise<DLQSummaryResponse> {
+    return fetchJson<DLQSummaryResponse>('/api/v1/manual-review/dlq-summary');
   }
 };

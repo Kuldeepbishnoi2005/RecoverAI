@@ -258,6 +258,72 @@ async def list_dlq_actions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/dlq-summary")
+async def get_dlq_summary(
+    user: AuthenticatedUser = Depends(get_current_user)
+):
+    """
+    Retrieves aggregate Dead-Letter Queue (DLQ) observability metrics and top 5 recent items for authenticated merchant.
+    """
+    try:
+        supabase = get_supabase_admin_client()
+        res = supabase.table("recovery_actions").select("*").eq("merchant_id", user.merchant_id).or_("is_dlq.eq.true,status.eq.EXECUTED_FAILED").order("created_at", desc=True).execute()
+        items = res.data or []
+
+        total_count = len(items)
+        total_failed_volume = 0.0
+        by_strategy: Dict[str, int] = {}
+        by_error: Dict[str, int] = {}
+
+        enriched_recent = []
+
+        for idx, act in enumerate(items):
+            tx_id = act.get("transaction_id")
+            tx_data = {}
+            if tx_id and idx < 5:
+                try:
+                    tx_res = supabase.table("transactions").select("*").eq("transaction_id", tx_id).execute()
+                    if tx_res.data:
+                        tx_data = tx_res.data[0]
+                except Exception:
+                    pass
+
+            amount = float(tx_data.get("amount", act.get("attempted_amount", 0.0)) or 0.0)
+            total_failed_volume += amount
+
+            strat = str(act.get("strategy") or act.get("action_type") or "RETRY_WITH_SMART_ROUTING")
+            by_strategy[strat] = by_strategy.get(strat, 0) + 1
+
+            err_reason = str(act.get("last_error") or act.get("policy_reason") or "Execution failure")
+            by_error[err_reason] = by_error.get(err_reason, 0) + 1
+
+            if idx < 5:
+                enriched_recent.append({
+                    "id": act.get("id"),
+                    "action_id": act.get("id"),
+                    "transaction_id": tx_id,
+                    "merchant_id": act.get("merchant_id"),
+                    "strategy": strat,
+                    "status": act.get("status"),
+                    "attempted_amount": amount,
+                    "retry_count": act.get("retry_count", 0),
+                    "last_error": err_reason,
+                    "is_dlq": bool(act.get("is_dlq", True)),
+                    "created_at": act.get("created_at")
+                })
+
+        return {
+            "total_dlq_count": total_count,
+            "total_failed_volume": round(total_failed_volume, 2),
+            "by_strategy": by_strategy,
+            "by_error": by_error,
+            "recent_dlq_items": enriched_recent
+        }
+    except Exception as e:
+        logger.error(f"Error generating DLQ summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{action_id}")
 async def get_manual_review_item(
     action_id: str,

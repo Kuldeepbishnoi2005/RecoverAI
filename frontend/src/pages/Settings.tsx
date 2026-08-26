@@ -5,6 +5,7 @@ import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
 import { api } from '../lib/api';
 import { MerchantSettings } from '../types';
+import { WebhookDeliveryTable } from '../components/WebhookDeliveryTable';
 
 export const Settings: React.FC = () => {
   const [settings, setSettings] = useState<MerchantSettings | null>(null);
@@ -311,6 +312,9 @@ export const Settings: React.FC = () => {
           )}
         </div>
       </Card>
+
+      {/* Webhook Delivery Log Inspector (Sanitized) */}
+      <WebhookDeliveryTable limit={10} showCardWrapper={true} />
 
       {/* Save Settings Bar */}
       <div className="flex justify-end pt-2">

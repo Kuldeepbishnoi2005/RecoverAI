@@ -24,6 +24,7 @@ import { Modal } from '../components/common/Modal';
 import { LoadingSpinner, ErrorBanner, EmptyState } from '../components/common/Feedback';
 import { api } from '../lib/api';
 import { ManualReviewQueueItem, ManualReviewActionDetail, DLQActionItem } from '../types';
+import { DLQStatusBadge } from '../components/DLQStatusBadge';
 
 export const ManualReview: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'pending' | 'dlq'>('pending');
@@ -223,16 +224,19 @@ export const ManualReview: React.FC = () => {
             Authorize high-risk recovery interventions and manually replay failed executions with gateway resilience.
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={refreshAll}
-          disabled={loadingPending || loadingDlq}
-          className="gap-1.5 text-xs self-start sm:self-auto"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${(loadingPending || loadingDlq) ? 'animate-spin' : ''}`} />
-          Refresh Workspace
-        </Button>
+        <div className="flex items-center gap-3 self-start sm:self-auto">
+          <DLQStatusBadge onClick={() => setActiveTab('dlq')} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={refreshAll}
+            disabled={loadingPending || loadingDlq}
+            className="gap-1.5 text-xs"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${(loadingPending || loadingDlq) ? 'animate-spin' : ''}`} />
+            Refresh Workspace
+          </Button>
+        </div>
       </div>
 
       {/* Tabs bar */}

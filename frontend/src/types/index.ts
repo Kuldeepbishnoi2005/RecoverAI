@@ -252,3 +252,23 @@ export interface DLQActionItem extends ManualReviewQueueItem {
   last_error: string;
   is_dlq: boolean;
 }
+
+export interface WebhookDeliveryItem {
+  id: string;
+  merchant_id: string;
+  event_type: string;
+  payload: Record<string, any>;
+  headers: Record<string, any>;
+  status_code: number;
+  response_body: string | Record<string, any> | null;
+  delivered_at: string;
+  created_at: string;
+}
+
+export interface DLQSummaryResponse {
+  total_dlq_count: number;
+  total_failed_volume: number;
+  by_strategy: Record<string, number>;
+  by_error: Record<string, number>;
+  recent_dlq_items: DLQActionItem[];
+}

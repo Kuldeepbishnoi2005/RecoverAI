@@ -5,8 +5,8 @@ Manages dynamic merchant configuration, autonomous recovery parameters, and secu
 import secrets
 import logging
 from datetime import datetime
-from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends, status
+from typing import Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, Depends, status, Query
 from pydantic import BaseModel, Field
 
 from app.auth.deps import get_current_user, AuthenticatedUser
@@ -238,4 +238,31 @@ async def rotate_webhook_secret(user: AuthenticatedUser = Depends(get_current_us
         )
     except Exception as e:
         logger.error(f"Error rotating webhook secret: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/webhook-logs")
+async def list_webhook_logs(
+    limit: int = Query(20, ge=1, le=100),
+    user: AuthenticatedUser = Depends(get_current_user)
+):
+    """
+    Retrieves recent webhook delivery attempt logs for the authenticated merchant.
+    """
+    try:
+        supabase = get_supabase_admin_client()
+        res = supabase.table("webhook_deliveries") \
+            .select("*") \
+            .eq("merchant_id", user.merchant_id) \
+            .order("delivered_at", desc=True) \
+            .limit(limit) \
+            .execute()
+
+        logs = res.data or []
+        return {
+            "items": logs,
+            "total": len(logs)
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving webhook logs: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -322,5 +322,9 @@ export const api = {
       throw new Error(errJson.detail || `Replay Error ${res.status}: ${res.statusText}`);
     }
     return res.json();
+  },
+
+  async getWebhookLogs(limit: number = 20): Promise<{ items: any[]; total: number }> {
+    return fetchJson<{ items: any[]; total: number }>(`/api/v1/merchant-settings/webhook-logs?limit=${limit}`);
   }
 };

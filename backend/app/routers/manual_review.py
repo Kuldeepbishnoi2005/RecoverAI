@@ -50,6 +50,11 @@ class RejectRequest(BaseModel):
     rejection_reason: str = "Rejected by merchant operator"
     actor: str = "merchant_admin"
 
+class ReplayRequest(BaseModel):
+    actor: str = "merchant_admin"
+    notes: Optional[str] = "Manual action replay initiated"
+
+
 
 def expire_stale_manual_reviews(merchant_id: Optional[str] = None) -> int:
     """
@@ -192,6 +197,64 @@ async def get_manual_review_queue(
             "offset": offset
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dlq")
+async def list_dlq_actions(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    user: AuthenticatedUser = Depends(get_current_user)
+):
+    """
+    Retrieve recovery actions currently in Dead-Letter Queue (DLQ) or EXECUTED_FAILED state for authenticated merchant.
+    """
+    try:
+        supabase = get_supabase_admin_client()
+        query = supabase.table("recovery_actions").select("*").eq("merchant_id", user.merchant_id).or_("is_dlq.eq.true,status.eq.EXECUTED_FAILED")
+
+        res = query.order("created_at", desc=True).execute()
+        raw_items = res.data or []
+
+        enriched_items = []
+        for act in raw_items:
+            tx_id = act.get("transaction_id")
+            tx_data = {}
+            if tx_id:
+                try:
+                    tx_res = supabase.table("transactions").select("*").eq("transaction_id", tx_id).execute()
+                    if tx_res.data:
+                        tx_data = tx_res.data[0]
+                except Exception:
+                    pass
+
+            item = {
+                "id": act.get("id"),
+                "action_id": act.get("id"),
+                "transaction_id": tx_id,
+                "merchant_id": act.get("merchant_id"),
+                "strategy": act.get("strategy") or act.get("action_type") or "RETRY_WITH_SMART_ROUTING",
+                "status": act.get("status"),
+                "attempted_amount": float(tx_data.get("amount", act.get("attempted_amount", 0.0)) or 0.0),
+                "retry_count": act.get("retry_count", 0),
+                "last_error": act.get("last_error") or act.get("policy_reason") or "Execution failure",
+                "is_dlq": bool(act.get("is_dlq", True)),
+                "created_at": act.get("created_at"),
+                "transaction": tx_data
+            }
+            enriched_items.append(item)
+
+        total_count = len(enriched_items)
+        paged_items = enriched_items[offset : offset + limit]
+
+        return {
+            "items": paged_items,
+            "total": total_count,
+            "limit": limit,
+            "offset": offset
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving DLQ list: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -649,70 +712,6 @@ async def reject_manual_review(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/dlq")
-async def list_dlq_actions(
-    limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    user: AuthenticatedUser = Depends(get_current_user)
-):
-    """
-    Retrieve recovery actions currently in Dead-Letter Queue (DLQ) or EXECUTED_FAILED state for authenticated merchant.
-    """
-    try:
-        supabase = get_supabase_admin_client()
-        query = supabase.table("recovery_actions").select("*").eq("merchant_id", user.merchant_id).or_("is_dlq.eq.true,status.eq.EXECUTED_FAILED")
-
-        res = query.order("created_at", desc=True).execute()
-        raw_items = res.data or []
-
-        enriched_items = []
-        for act in raw_items:
-            tx_id = act.get("transaction_id")
-            tx_data = {}
-            if tx_id:
-                try:
-                    tx_res = supabase.table("transactions").select("*").eq("transaction_id", tx_id).execute()
-                    if tx_res.data:
-                        tx_data = tx_res.data[0]
-                except Exception:
-                    pass
-
-            item = {
-                "id": act.get("id"),
-                "action_id": act.get("id"),
-                "transaction_id": tx_id,
-                "merchant_id": act.get("merchant_id"),
-                "strategy": act.get("strategy") or act.get("action_type") or "RETRY_WITH_SMART_ROUTING",
-                "status": act.get("status"),
-                "attempted_amount": float(tx_data.get("amount", act.get("attempted_amount", 0.0)) or 0.0),
-                "retry_count": act.get("retry_count", 0),
-                "last_error": act.get("last_error") or act.get("policy_reason") or "Execution failure",
-                "is_dlq": bool(act.get("is_dlq", True)),
-                "created_at": act.get("created_at"),
-                "transaction": tx_data
-            }
-            enriched_items.append(item)
-
-        total_count = len(enriched_items)
-        paged_items = enriched_items[offset : offset + limit]
-
-        return {
-            "items": paged_items,
-            "total": total_count,
-            "limit": limit,
-            "offset": offset
-        }
-    except Exception as e:
-        logger.error(f"Error retrieving DLQ list: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class ReplayRequest(BaseModel):
-    actor: str = "merchant_admin"
-    notes: Optional[str] = None
-    force_gateway: Optional[str] = None
-
-
 @router.post("/{action_id}/replay")
 async def replay_recovery_action(
     action_id: str,
@@ -737,6 +736,22 @@ async def replay_recovery_action(
         act = res.data[0]
         tx_id = act.get("transaction_id")
         current_retry = int(act.get("retry_count", 0) or 0)
+
+        # Check max retry attempts (default 3)
+        max_retry_attempts = 3
+        try:
+            ms_res = supabase.table("merchant_settings").select("max_retry_attempts").eq("merchant_id", user.merchant_id).execute()
+            if ms_res.data and len(ms_res.data) > 0:
+                max_retry_attempts = int(ms_res.data[0].get("max_retry_attempts") or 3)
+        except Exception:
+            pass
+
+        if current_retry >= max_retry_attempts:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Exceeded maximum retry attempts ({max_retry_attempts})"
+            )
+
         # Fetch transaction details
         tx_data = {}
         if tx_id:
@@ -787,7 +802,9 @@ async def replay_recovery_action(
                 "last_error": None,
                 "success": True,
                 "recovered_amount": amount,
-                "executed_at": now_str
+                "executed_at": now_str,
+                "replayed_at": now_str,
+                "replayed_by": req_actor
             }
             supabase.table("recovery_actions").update(update_data).eq("id", action_id).execute()
 
@@ -851,7 +868,9 @@ async def replay_recovery_action(
                 "retry_count": new_retry_count,
                 "last_error": adapter_res.error_message or "Gateway execution failed",
                 "success": False,
-                "executed_at": now_str
+                "executed_at": now_str,
+                "replayed_at": now_str,
+                "replayed_by": req_actor
             }
             supabase.table("recovery_actions").update(update_data).eq("id", action_id).execute()
 

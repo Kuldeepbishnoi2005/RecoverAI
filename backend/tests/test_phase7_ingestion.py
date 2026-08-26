@@ -12,10 +12,12 @@ from app.config import settings
 
 client = TestClient(app)
 
+import uuid
+
 def test_1_unsigned_unauthenticated_request_rejected():
     """Unsigned/unauthenticated requests must be rejected with 401 Unauthorized."""
     payload = {
-        "event_id": "evt_unauth_001",
+        "event_id": f"evt_unauth_{uuid.uuid4().hex[:8]}",
         "transaction_id": "tx_unauth_001",
         "merchant_id": "spoofed_merchant_999",
         "amount": 500.0,
@@ -28,7 +30,7 @@ def test_1_unsigned_unauthenticated_request_rejected():
 def test_2_webhook_signature_verification_success_and_merchant_override():
     """Valid HMAC signature request succeeds and enforces verified merchant ID."""
     payload = {
-        "event_id": "evt_sig_001",
+        "event_id": f"evt_sig_{uuid.uuid4().hex[:8]}",
         "transaction_id": "tx_sig_001",
         "merchant_id": "attacker_spoofed_merchant",  # Should be overridden by verified merchant
         "customer_id": "cust_sig_001",
@@ -72,12 +74,14 @@ def test_3_invalid_signature_rejected():
 
 def test_4_idempotency_duplicate_event_skipped():
     """Duplicate events with same event_id must be skipped without duplicate execution."""
+    unique_evt = f"evt_idempotent_{uuid.uuid4().hex[:8]}"
     payload = {
-        "event_id": "evt_idempotent_001",
+        "event_id": unique_evt,
         "transaction_id": "tx_idempotent_001",
         "amount": 800.0,
         "status": "SUCCESS"
     }
+
     raw_body = json.dumps(payload).encode("utf-8")
     signature = hmac.new(
         settings.WEBHOOK_SECRET.encode("utf-8"),

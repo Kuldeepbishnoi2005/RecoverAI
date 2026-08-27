@@ -7,6 +7,22 @@ from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 
+from enum import Enum
+
+
+class ExecutionState(str, Enum):
+    CONFIRMED_EXECUTED = "CONFIRMED_EXECUTED"
+    CONFIRMED_NOT_EXECUTED = "CONFIRMED_NOT_EXECUTED"
+    UNKNOWN = "UNKNOWN"
+
+
+class ErrorClassification(str, Enum):
+    NONE = "NONE"
+    TRANSIENT = "TRANSIENT"
+    PERMANENT = "PERMANENT"
+    UNKNOWN = "UNKNOWN"
+
+
 class AdapterExecutionResult(BaseModel):
     """Result returned by any Gateway Adapter execution."""
     success: bool
@@ -15,6 +31,8 @@ class AdapterExecutionResult(BaseModel):
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     retryable: bool = False
+    execution_state: ExecutionState = ExecutionState.UNKNOWN
+    error_classification: ErrorClassification = ErrorClassification.NONE
 
 
 class BaseGatewayAdapter(ABC):

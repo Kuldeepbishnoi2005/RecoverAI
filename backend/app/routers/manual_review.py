@@ -22,7 +22,7 @@ from app.ai.schemas import (
     RiskEngineContext
 )
 
-from app.adapters import get_gateway_adapter
+from app.adapters import get_gateway_adapter, ResilientGatewayExecutor
 
 logger = logging.getLogger("app.routers.manual_review")
 
@@ -53,6 +53,8 @@ class RejectRequest(BaseModel):
 class ReplayRequest(BaseModel):
     actor: str = "merchant_admin"
     notes: Optional[str] = "Manual action replay initiated"
+    force_gateway: Optional[str] = None
+    backup_gateway: Optional[str] = None
 
 
 
@@ -828,37 +830,56 @@ async def replay_recovery_action(
             except Exception:
                 pass
 
-        # Step 2: Fetch merchant settings to know gateway provider
-        gateway_provider = "sandbox"
+        # Step 2: Fetch merchant settings to determine default and backup gateways
+        primary_gateway = "sandbox"
+        backup_gateway = None
+
         if payload and payload.force_gateway:
-            gateway_provider = payload.force_gateway
+            primary_gateway = payload.force_gateway
         else:
             try:
-                ms_res = supabase.table("merchant_settings").select("default_gateway").eq("merchant_id", user.merchant_id).execute()
+                ms_res = supabase.table("merchant_settings").select("default_gateway, backup_gateway").eq("merchant_id", user.merchant_id).execute()
                 if ms_res.data and len(ms_res.data) > 0:
-                    gateway_provider = ms_res.data[0].get("default_gateway", "sandbox")
+                    primary_gateway = ms_res.data[0].get("default_gateway", "sandbox")
+                    backup_gateway = ms_res.data[0].get("backup_gateway")
             except Exception:
                 pass
 
-        # Step 3: Instantiate Adapter and execute replay
-        adapter = get_gateway_adapter(gateway_provider)
+        if payload and payload.backup_gateway:
+            backup_gateway = payload.backup_gateway
+
+        # Step 3: Instantiate ResilientGatewayExecutor and execute replay
+        executor = ResilientGatewayExecutor()
         action_type = act.get("strategy") or act.get("action_type") or "RETRY_WITH_SMART_ROUTING"
         amount = float(tx_data.get("amount", act.get("attempted_amount", 0.0)) or 0.0)
         currency = tx_data.get("currency", "INR")
-        adapter_res = adapter.execute_action(
-            action_type=action_type,
-            amount=amount,
-            currency=currency,
-            payload={
-                "transaction_id": tx_id,
-                "action_id": action_id,
-                "merchant_id": user.merchant_id,
-                "replay_note": req_notes,
-            }
-        )
+
+        replay_payload = {
+            "transaction_id": tx_id,
+            "action_id": action_id,
+            "merchant_id": user.merchant_id,
+            "replay_note": req_notes,
+        }
+        if act.get("metadata") and isinstance(act.get("metadata"), dict):
+            replay_payload.update(act.get("metadata"))
 
         now_str = datetime.utcnow().isoformat()
         new_retry_count = current_retry + 1
+
+        adapter_res = executor.execute_with_fallback(
+            action_type=action_type,
+            amount=amount,
+            currency=currency,
+            primary_provider=primary_gateway,
+            backup_provider=backup_gateway,
+            payload=replay_payload,
+            action_id=action_id,
+            retry_count=new_retry_count,
+        )
+
+        gw_resp = adapter_res.gateway_response or {}
+        fallback_blocked_reason = gw_resp.get("fallback_blocked_reason")
+        fallback_executed = gw_resp.get("fallback_executed", False)
 
         if adapter_res.success:
             update_data = {
@@ -884,9 +905,12 @@ async def replay_recovery_action(
                     "recovered_amount": amount,
                     "is_successful": True,
                     "result_details": {
-                        "gateway": adapter.provider_name,
+                        "gateway": primary_gateway,
                         "transaction_id": adapter_res.transaction_id,
-                        "replayed_by": req_actor
+                        "replayed_by": req_actor,
+                        "execution_state": adapter_res.execution_state.value,
+                        "error_classification": adapter_res.error_classification.value,
+                        "fallback_executed": fallback_executed,
                     },
                     "measured_at": now_str,
                     "created_at": now_str
@@ -908,9 +932,12 @@ async def replay_recovery_action(
                 "details": {
                     "action_id": action_id,
                     "transaction_id": tx_id,
-                    "gateway": adapter.provider_name,
+                    "gateway": primary_gateway,
                     "transaction_id_gateway": adapter_res.transaction_id,
-                    "retry_count": new_retry_count
+                    "retry_count": new_retry_count,
+                    "execution_state": adapter_res.execution_state.value,
+                    "error_classification": adapter_res.error_classification.value,
+                    "fallback_executed": fallback_executed,
                 },
                 "created_at": now_str
             }
@@ -925,6 +952,9 @@ async def replay_recovery_action(
                 "status": "EXECUTED_SUCCESS",
                 "retry_count": new_retry_count,
                 "gateway_transaction_id": adapter_res.transaction_id,
+                "execution_state": adapter_res.execution_state.value,
+                "error_classification": adapter_res.error_classification.value,
+                "fallback_executed": fallback_executed,
                 "message": "Action replayed successfully."
             }
         else:
@@ -940,13 +970,15 @@ async def replay_recovery_action(
             }
             supabase.table("recovery_actions").update(update_data).eq("id", action_id).execute()
 
+            audit_action = "GATEWAY_FALLBACK_BLOCKED" if fallback_blocked_reason else "RECOVERY_ACTION_REPLAY_FAILED"
+
             # Insert Audit Log
             audit_payload = {
                 "merchant_id": user.merchant_id,
                 "actor_type": "user",
                 "actor_id": user.user_id,
-                "action": "RECOVERY_ACTION_REPLAY_FAILED",
-                "action_type": "RECOVERY_ACTION_REPLAY_FAILED",
+                "action": audit_action,
+                "action_type": audit_action,
                 "entity_type": "recovery_action",
                 "entity_id": action_id,
                 "actor": req_actor,
@@ -955,7 +987,10 @@ async def replay_recovery_action(
                     "transaction_id": tx_id,
                     "error_code": adapter_res.error_code,
                     "error_message": adapter_res.error_message,
-                    "retry_count": new_retry_count
+                    "retry_count": new_retry_count,
+                    "execution_state": adapter_res.execution_state.value,
+                    "error_classification": adapter_res.error_classification.value,
+                    "fallback_blocked_reason": fallback_blocked_reason,
                 },
                 "created_at": now_str
             }
@@ -971,6 +1006,9 @@ async def replay_recovery_action(
                 "retry_count": new_retry_count,
                 "error_code": adapter_res.error_code,
                 "error_message": adapter_res.error_message,
+                "execution_state": adapter_res.execution_state.value,
+                "error_classification": adapter_res.error_classification.value,
+                "fallback_blocked_reason": fallback_blocked_reason,
                 "message": "Replay failed and item remains in DLQ."
             }
 

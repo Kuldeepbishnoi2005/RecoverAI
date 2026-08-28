@@ -152,19 +152,21 @@ def call_ai_strategist(context: AIContext) -> AIDecisionOutput:
 
     try:
         import time
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model_name = getattr(settings, "GEMINI_MODEL", None) or os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-        model = genai.GenerativeModel(model_name)
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=api_key)
+        model_name = getattr(settings, "GEMINI_MODEL", None) or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
         user_content = f"CONTEXT DATA:\n{context.model_dump_json(indent=2)}"
         
         max_retries = 20
         for attempt in range(max_retries):
             try:
-                response = model.generate_content(
-                    f"{SYSTEM_PROMPT}\n\n{user_content}",
-                    generation_config={"response_mime_type": "application/json"}
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=f"{SYSTEM_PROMPT}\n\n{user_content}",
+                    config=types.GenerateContentConfig(response_mime_type="application/json")
                 )
                 raw_json = response.text
                 data = json.loads(raw_json)
@@ -193,18 +195,17 @@ def call_ai_strategist(context: AIContext) -> AIDecisionOutput:
                         sleep_time = float(match.group(1)) + 2.0
                     else:
                         sleep_time = max((2 ** min(attempt, 5)) * 5, 20)
-                    msg = f"Rate limited (429): {err_str[:120]}... Retrying in {sleep_time:.1f}s... (Attempt {attempt + 1}/{max_retries})"
+                    msg = f"Rate limited (429)... Retrying in {sleep_time:.1f}s... (Attempt {attempt + 1}/{max_retries})"
                     logger.warning(msg)
-                    print(msg, flush=True)
                     time.sleep(sleep_time)
                 else:
                     if os.getenv("STRICT_GEMINI_EVAL", "0") == "1":
-                        raise RuntimeError(f"Gemini API call failed: {str(e)}") from e
+                        raise RuntimeError("Gemini API call failed during STRICT_GEMINI_EVAL") from e
                     logger.warning("Falling back to expert AI Strategist.")
                     return _generate_fallback_decision(context)
     except Exception as e:
-        logger.error(f"Gemini API call failed: {str(e)}")
+        logger.error("Gemini API call failed.")
         if os.getenv("STRICT_GEMINI_EVAL", "0") == "1":
-            raise RuntimeError(f"Gemini API call failed: {str(e)}") from e
+            raise RuntimeError("Gemini API call failed during STRICT_GEMINI_EVAL") from e
         logger.warning("Falling back to expert AI Strategist.")
         return _generate_fallback_decision(context)

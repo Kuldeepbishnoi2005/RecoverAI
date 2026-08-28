@@ -24,7 +24,9 @@ from tests.test_phase8b2_observability import run_all_phase8b2_tests
 from tests.test_phase8b3_gateway_fallback import run_all_phase8b3_tests
 from tests.test_phase9_gateway_adapters import run_all_phase9_tests
 from tests.test_phase92_gemini import run_gemini_migration_tests
+from tests.test_phase93_sandbox_validation import run_all_phase93_tests
 from unittest.mock import patch
+
 from app.config import settings
 
 def main():
@@ -106,7 +108,15 @@ def main():
             print(f"[FAIL] Phase 9.2 Gemini migration tests error: {e}")
             failed += 1
 
+        print("\n--- RUNNING PHASE 9.3 SANDBOX GATEWAY VALIDATION TEST SUITE ---")
+        try:
+            run_all_phase93_tests()
+        except Exception as e:
+            print(f"[FAIL] Phase 9.3 Sandbox Gateway Validation tests error: {e}")
+            failed += 1
+
         if failed > 0:
+
             sys.exit(1)
         else:
             print("\nALL BACKEND AUTOMATED TESTS PASSED SUCCESSFULLY!")

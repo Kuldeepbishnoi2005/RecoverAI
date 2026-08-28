@@ -44,14 +44,32 @@ def _to_uuid_str(val: str) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, val))
 
 
+from app.adapters.stripe_adapter import StripeAdapter
+from app.adapters.razorpay_adapter import RazorpayAdapter
+
+_stripe_adapter = StripeAdapter()
+_razorpay_adapter = RazorpayAdapter()
+
+
 def verify_webhook_signature(raw_body: bytes, signature_header: str, secret: str) -> bool:
     """
-    Verifies HMAC-SHA256 webhook signature in constant time.
+    Verifies HMAC-SHA256 webhook signature in constant time with provider-native verification support.
     """
     if not signature_header or not secret:
         return False
     
     clean_sig = signature_header.strip()
+
+    # Provider-native Stripe verification (t=...,v1=...)
+    if "t=" in clean_sig and "v1=" in clean_sig:
+        if _stripe_adapter.verify_webhook_signature(raw_body, clean_sig, secret):
+            return True
+
+    # Provider-native Razorpay verification
+    if _razorpay_adapter.verify_webhook_signature(raw_body, clean_sig, secret):
+        return True
+
+    # Fallback generic HMAC-SHA256 check
     if "=" in clean_sig and not clean_sig.startswith("0x"):
         parts = clean_sig.split("=")
         clean_sig = parts[-1]
@@ -63,6 +81,7 @@ def verify_webhook_signature(raw_body: bytes, signature_header: str, secret: str
     ).hexdigest()
 
     return hmac.compare_digest(clean_sig.lower(), expected_sig.lower())
+
 
 
 def resolve_webhook_merchant(raw_body: bytes, sig_header: str) -> Optional[str]:
@@ -170,6 +189,7 @@ async def ingest_webhook_event(
     x_webhook_signature: Optional[str] = Header(None, alias="X-Webhook-Signature"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
     stripe_signature: Optional[str] = Header(None, alias="Stripe-Signature"),
+    x_razorpay_signature: Optional[str] = Header(None, alias="X-Razorpay-Signature"),
     authorization: Optional[str] = Header(None, alias="Authorization")
 ):
     """
@@ -184,7 +204,7 @@ async def ingest_webhook_event(
     4. Idempotency Protection prevents duplicate recovery pipeline execution using database primary key constraints.
     """
     raw_body = await request.body()
-    sig_header = x_webhook_signature or x_signature or stripe_signature
+    sig_header = x_webhook_signature or x_signature or stripe_signature or x_razorpay_signature
 
     verified_merchant_id: Optional[str] = None
     auth_method: str = "NONE"

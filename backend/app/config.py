@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
     WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "recoverai_webhook_secret_key_2026")
     RECOVERAI_KMS_KEY: str = os.getenv("RECOVERAI_KMS_KEY", DEFAULT_DEV_KMS_KEY)
+    CORS_ALLOWED_ORIGINS: str = os.getenv("CORS_ALLOWED_ORIGINS", "")
 
     class Config:
         case_sensitive = True
@@ -38,5 +39,24 @@ class Settings(BaseSettings):
                     "must be explicitly configured with a secure master key in production mode."
                 )
         return key
+
+    def get_allowed_origins(self) -> list:
+        raw = (self.CORS_ALLOWED_ORIGINS or "").strip()
+        if raw:
+            return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+        env = (self.ENVIRONMENT or "development").lower()
+        if env == "production":
+            raise RuntimeError(
+                "Production Fail-Closed Violation: CORS_ALLOWED_ORIGINS environment variable "
+                "must be explicitly configured with trusted production origin(s) (e.g. Vercel frontend URL) in production mode."
+            )
+
+        return [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+        ]
 
 settings = Settings()

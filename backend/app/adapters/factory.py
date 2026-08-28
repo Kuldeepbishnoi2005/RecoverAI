@@ -5,10 +5,13 @@ Returns the appropriate BaseGatewayAdapter implementation for a given provider n
 from typing import Dict, Type
 from app.adapters.base import BaseGatewayAdapter
 from app.adapters.sandbox import SandboxSimulatorAdapter
+from app.adapters.stripe_adapter import StripeAdapter
+from app.adapters.razorpay_adapter import RazorpayAdapter
 
 _ADAPTER_REGISTRY: Dict[str, Type[BaseGatewayAdapter]] = {
     "sandbox": SandboxSimulatorAdapter,
-    # Future providers (e.g. stripe, razorpay) can be registered here safely without breaking API contracts
+    "stripe": StripeAdapter,
+    "razorpay": RazorpayAdapter,
 }
 
 

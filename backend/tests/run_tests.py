@@ -22,6 +22,7 @@ from tests.test_phase7_ingestion import run_all_ingestion_tests
 from tests.test_phase8_resilience import run_all_phase8_tests
 from tests.test_phase8b2_observability import run_all_phase8b2_tests
 from tests.test_phase8b3_gateway_fallback import run_all_phase8b3_tests
+from tests.test_phase9_gateway_adapters import run_all_phase9_tests
 
 def main():
     print("--- RUNNING PHASE 2.5 DECOUPLED ENGINE AUTOMATED TEST SUITE ---")
@@ -84,6 +85,13 @@ def main():
         run_all_phase8b3_tests()
     except Exception as e:
         print(f"[FAIL] Phase 8B.3 gateway fallback tests error: {e}")
+        failed += 1
+
+    print("\n--- RUNNING PHASE 9.1 PRODUCTION GATEWAY ADAPTERS TEST SUITE ---")
+    try:
+        run_all_phase9_tests()
+    except Exception as e:
+        print(f"[FAIL] Phase 9.1 gateway adapters tests error: {e}")
         failed += 1
 
     if failed > 0:

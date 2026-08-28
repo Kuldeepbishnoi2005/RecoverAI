@@ -4,6 +4,8 @@ Provides abstract BaseGatewayAdapter and concrete implementations (SandboxSimula
 """
 from app.adapters.base import BaseGatewayAdapter, AdapterExecutionResult, ExecutionState, ErrorClassification
 from app.adapters.sandbox import SandboxSimulatorAdapter
+from app.adapters.stripe_adapter import StripeAdapter
+from app.adapters.razorpay_adapter import RazorpayAdapter
 from app.adapters.factory import get_gateway_adapter
 from app.adapters.resilient_executor import ResilientGatewayExecutor
 
@@ -13,6 +15,8 @@ __all__ = [
     "ExecutionState",
     "ErrorClassification",
     "SandboxSimulatorAdapter",
+    "StripeAdapter",
+    "RazorpayAdapter",
     "get_gateway_adapter",
     "ResilientGatewayExecutor",
 ]

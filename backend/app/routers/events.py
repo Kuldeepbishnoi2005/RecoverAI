@@ -90,16 +90,34 @@ def resolve_webhook_merchant(raw_body: bytes, sig_header: str) -> Optional[str]:
     Does NOT accept or trust any client-supplied merchant_id or headers.
 
     Security Model:
-    1. Production Webhook Mode: Checks merchant-specific signing secrets from the database.
-       If the HMAC signature matches a merchant's secret, that specific merchant's ID is returned.
-    2. Local Development / Testing Fallback: Uses global WEBHOOK_SECRET.
-       Explicitly maps to the default test merchant ('merchant_001') without inspecting
-       or selecting arbitrary database rows.
+    1. Primary Mode: Check encrypted merchant credentials via CredentialResolver.
+    2. Fallback Mode: Check merchant-specific signing secrets from merchant_settings / merchants tables.
+    3. Development / Testing Fallback: Uses global WEBHOOK_SECRET.
     """
     if not sig_header:
         return None
 
-    # 1. Production Mode: Check merchant-specific webhook secrets stored in merchant_settings table
+    # 1. Primary Security Layer: Encrypted merchant_credentials table
+    try:
+        from app.services.credential_resolver import credential_resolver
+        supabase = get_supabase_admin_client()
+        mc_res = supabase.table("merchant_credentials").select("merchant_id, encrypted_payload, wrapped_dek, payload_nonce, wrapped_dek_nonce, key_version").eq("credential_type", "webhook_secret").execute()
+        if mc_res and mc_res.data:
+            for mc in mc_res.data:
+                m_id = mc.get("merchant_id")
+                if m_id:
+                    try:
+                        secret_wrapper = credential_resolver.decrypt(m_id, mc)
+                        m_secret = secret_wrapper.get_secret_value()
+                        if verify_webhook_signature(raw_body, sig_header, m_secret):
+                            logger.info(f"Resolved merchant '{m_id}' cryptographically via encrypted merchant_credentials.")
+                            return str(m_id)
+                    except Exception as dec_err:
+                        logger.debug(f"Signature mismatch or decryption failure for merchant '{m_id}': {dec_err}")
+    except Exception as e:
+        logger.warning(f"Error resolving merchant from encrypted merchant_credentials database: {e}")
+
+    # 2. Fallback Mode: Check merchant_settings table
     try:
         supabase = get_supabase_admin_client()
         ms_res = supabase.table("merchant_settings").select("merchant_id, webhook_secret").execute()
@@ -128,7 +146,7 @@ def resolve_webhook_merchant(raw_body: bytes, sig_header: str) -> Optional[str]:
     except Exception as e:
         logger.warning(f"Error resolving merchant from database webhook secrets: {e}")
 
-    # 2. Local Development / Testing Fallback Mode: Check system global WEBHOOK_SECRET
+    # 3. Local Development / Testing Fallback Mode: Check system global WEBHOOK_SECRET
     if settings.WEBHOOK_SECRET and verify_webhook_signature(raw_body, sig_header, settings.WEBHOOK_SECRET):
         logger.info("Authenticated webhook using global WEBHOOK_SECRET fallback (Development/Testing Mode).")
         return getattr(settings, "DEFAULT_MERCHANT_ID", "merchant_001")

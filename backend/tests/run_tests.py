@@ -25,9 +25,18 @@ from tests.test_phase8b3_gateway_fallback import run_all_phase8b3_tests
 from tests.test_phase9_gateway_adapters import run_all_phase9_tests
 from tests.test_phase92_gemini import run_gemini_migration_tests
 from tests.test_phase93_sandbox_validation import run_all_phase93_tests
+from tests.test_phase95_credential_security import TestPhase95CredentialSecurity
+import unittest
 from unittest.mock import patch
 
 from app.config import settings
+
+def run_all_phase95_tests():
+    suite = unittest.TestLoader().loadTestsFromTestCase(TestPhase95CredentialSecurity)
+    runner = unittest.TextTestRunner(verbosity=1)
+    result = runner.run(suite)
+    if not result.wasSuccessful():
+        raise RuntimeError("Phase 9.5 Credential Security tests failed!")
 
 def main():
     # Enforce zero real Gemini API calls during standard automated test runs
@@ -115,8 +124,15 @@ def main():
             print(f"[FAIL] Phase 9.3 Sandbox Gateway Validation tests error: {e}")
             failed += 1
 
-        if failed > 0:
+        print("\n--- RUNNING PHASE 9.5 MULTI-TENANT CREDENTIAL SECURITY TEST SUITE ---")
+        try:
+            run_all_phase95_tests()
+            print("[PASS] Phase 9.5 Multi-Tenant Credential Security tests passed successfully.")
+        except Exception as e:
+            print(f"[FAIL] Phase 9.5 Credential Security tests error: {e}")
+            failed += 1
 
+        if failed > 0:
             sys.exit(1)
         else:
             print("\nALL BACKEND AUTOMATED TESTS PASSED SUCCESSFULLY!")

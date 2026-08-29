@@ -13,7 +13,11 @@ import {
 } from '../types';
 import { supabase } from './supabase';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.PROD
+    ? 'https://recoverai-6gwv.onrender.com'
+    : 'http://localhost:8000');
 
 async function getAuthHeader(): Promise<Record<string, string>> {
   try {
